@@ -1,1 +1,2 @@
 It is for commit test.
+And we will create a new branch.
