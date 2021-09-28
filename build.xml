@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<project default="run_jar" name="Create Runnable Jar for Project ChargingStation with libraries in sub-folder">
+    <!--this file was created by Eclipse Runnable JAR Export Wizard-->
+    <!--ANT 1.7 is required                                        -->
+    <!--define folder properties-->
+    <property name="dir.workspace" value="/mnt"/>
+    <property name="dir.src" value="${dir.workspace}/Cornerstone/ChargingStation/src"/>
+    <property name="dir.bin" value="${dir.workspace}/Cornerstone/ChargingStation/bin"/>
+    <property name="dir.jarfile" value="."/>
+    <target name="compile">
+		<javac srcdir="${dir.src}" destdir="${dir.bin}" debug="true"/>
+    </target>
+    <target name="create_jar" depends="compile">
+        <jar destfile="${dir.jarfile}/ChargingStation.jar">
+            <manifest>
+                <attribute name="Main-Class" value="cornerstone.ChargingStation"/>
+                <attribute name="Class-Path" value=". ChargingStation_lib/grizzly-http-all-2.3.19.jar ChargingStation_lib/gson-2.8.5.jar ChargingStation_lib/opencv-412.jar ChargingStation_lib/bridj-0.7.0.jar ChargingStation_lib/javax.mail.jar ChargingStation_lib/javax.websocket-api-1.1.jar ChargingStation_lib/json-20180130.jar ChargingStation_lib/pi4j-core-1.3.jar ChargingStation_lib/slf4j-api-1.7.2.jar ChargingStation_lib/tyrus-client-1.13.1.jar ChargingStation_lib/tyrus-container-grizzly-client-1.13.1.jar ChargingStation_lib/tyrus-container-grizzly-server-1.13.1.jar ChargingStation_lib/tyrus-core-1.13.1.jar ChargingStation_lib/tyrus-server-1.13.1.jar ChargingStation_lib/tyrus-spi-1.13.1.jar ChargingStation_lib/webcam-capture-0.3.12.jar ChargingStation_lib/webcam-capture-driver-fswebcam-0.3.12.jar ChargingStation_lib/zxing-core-3.3.0.jar ChargingStation_lib/jSerialComm-1.3.11.jar ChargingStation_lib/javase-3.3.0.jar"/>
+            </manifest>
+            <fileset dir="${dir.bin}"/>
+            <fileset dir="${dir.workspace}/VictorLibrary/bin"/>
+        </jar>
+        <!--<delete dir="${dir.jarfile}/ChargingStation_lib"/>-->
+        <mkdir dir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/bridj-0.7.0.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/grizzly-http-all-2.3.19.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/gson-2.8.5.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/javase-3.3.0.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/javax.mail.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/javax.websocket-api-1.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/json-20180130.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/opencv-412.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/pi4j-core-1.3.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/slf4j-api-1.7.2.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/tyrus-client-1.13.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/tyrus-container-grizzly-client-1.13.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/tyrus-container-grizzly-server-1.13.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/tyrus-core-1.13.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/tyrus-server-1.13.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/tyrus-spi-1.13.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/webcam-capture-0.3.12.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/webcam-capture-driver-fswebcam-0.3.12.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/zxing-core-3.3.0.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/jSerialComm-1.3.11.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+        <copy file="${dir.workspace}/JavaLib/jrpicam-1.1.1.jar" todir="${dir.jarfile}/ChargingStation_lib"/>
+    	
+        <mkdir dir="${dir.jarfile}/resources"/>
+    	<copy todir="${dir.jarfile}/resources">
+    	    <fileset dir="${dir.workspace}/Cornerstone/ChargingStation/resources"/>
+    	</copy>
+    </target>
+    <target name="run_jar" depends="create_jar">
+		<java jar="${dir.jarfile}/ChargingStation.jar" fork="true">
+			<jvmarg value="-Djava.library.path=/home/pi/opencv-4.1.2/build/lib"/>
+ 		    <arg value="config.txt"/>
+		</java>
+    </target>
+</project>

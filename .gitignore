@@ -1,0 +1,7 @@
+*.tmp
+bin/*
+build/*
+logs/*
+.vscode
+/bin/
+.idea/*
