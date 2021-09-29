@@ -6,7 +6,7 @@
 package cornerstone;
 
 /**********************************************************************************************************************/
-/********************************************* LIBRARY IMPORTED   *****************************************************/
+/*********************************************   LIBRARY IMPORTED   *****************************************************/
 /**********************************************************************************************************************/
 import java.awt.*;
 import java.awt.event.*;
@@ -72,7 +72,6 @@ import victorho.usb.USBListener;
 import victorho.util.*;
 import victorho.util.NetworkInterface;
 
-
 public class ChargingStation implements ChangeListener, Configurable, DataListener, ConnectionListener, USBListener {
 
 /**********************************************************************************************************************/
@@ -80,6 +79,9 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 /**********************************************************************************************************************/
 	
 	ChargingStationConfig configinfo = new ChargingStationConfig();	
+	private Point p;
+	private JSONObject ioSet;
+	private Dimension size = new Dimension(1024, 600);
 	private static String encryptKey = "CsT403.403";
 	private static File usbKey = new File("./rcr.key");				
 	private static final String OCPP_TEXT = "CSTEV2020";
@@ -118,7 +120,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private List<BufferedImage> imgsTx;
 	
 	//Settings
-//	private JsonObject config;
 	private JSONObject config;
 	private JSONObject lmsConfig;
 	private StringBuffer configSecret;
@@ -156,8 +157,8 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 
 	//Configuration
 	//private OCPP.InsufficientBlanceAction insufficientBalanceAction = OCPP.InsufficientBlanceAction.Reject;
-	private OCPP.InsufficientBlanceAction insufficientBalanceAction = OCPP.InsufficientBlanceAction.StopOnly;
-	
+	private boolean isConfigLatest = true;
+	private OCPP.InsufficientBlanceAction insufficientBalanceAction = OCPP.InsufficientBlanceAction.StopOnly;	
 	private OCPP.IdToken id;
 	private Socket housingSocietyLprsSocket;
 	private Thread housingSocietyLprsListener;
@@ -194,7 +195,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private State status=State.Startup;			
 	private State previousActiveState;
 	private boolean criticalFaultTriggered=false;
-	
 	private LED statusLED;
 	private Color ledColor = LEDConfig.UIOrange;	
 	private ImgSend imgTx ; 
@@ -207,8 +207,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 //	private JButton tsBtn3;
 //	private JButton tsBtn4;
 //	private JButton tsBtn5;
-//	private JButton tsBtn6;
-	
+//	private JButton tsBtn6;	
 	private JButton addHour;
 	private JButton minusHour;
 	private JButton addMin;
@@ -279,11 +278,11 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 /**********************************************************************************************************************/
 /*********************************************  FUNCTION  *************************************************************/
 /**********************************************************************************************************************/	
-	// This is for commit test.
+
 	/**
 	 * @Function main()
 	 * @param args
-	 * @throws XPathExpressionException 
+	 * @throws XPathExpressionException
 	 */
 	public static void main(String[] args) {
 		Logger.writeln("CS start");
@@ -297,173 +296,17 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	 */
 	
 	public ChargingStation(File cfg, int cid){
-		
+		/*update default configuration*/
 		checkAlreadyRunning();
-		lprsMsgBuf = new ArrayList<String>();
-		boolean isConfigLatest = true;
-		try {
-			FileInputStream fis = new FileInputStream(new File("./config.default"));
-			byte[] b = new byte[fis.available()];
-			fis.read(b);
-			fis.close();
-			encryptedConfig = Base64.getEncoder().encodeToString(b);
-			setHashMd5(new String(EncryptionFactory.decrypt(encryptKey, b)));
-			if(!configinfo.defaultConfig.equals(new String(EncryptionFactory.decrypt(encryptKey, b)))) {
-				isConfigLatest = false;
-			}
-		} catch (IOException e) {
-			isConfigLatest = false;
-		}
-	
-		try {
-			if(!isConfigLatest) {
-				FileOutputStream fos = new FileOutputStream(new File("./config.default"));
-				fos.write(EncryptionFactory.encrypt(encryptKey, configinfo.defaultConfig.getBytes()));
-				fos.close();
-				JSONObject newConfig = new JSONObject(configinfo.defaultConfig);
-				try {
-					if(cfg.exists()) {
-						FileInputStream fis = new FileInputStream(cfg);
-						byte[] b = new byte[fis.available()];
-						fis.read(b);
-						fis.close();
-						encryptedConfig = Base64.getEncoder().encodeToString(b);
-						b = EncryptionFactory.decrypt(encryptKey, b);
-						setHashMd5(new String(b));
-						config = new JSONObject(new String(b));
-						java.util.Set<String> keyset = config.keySet();
-						
-						for(String key : config.keySet()) {
-							if(newConfig.has(key)) {
-								JSONObject json = newConfig.getJSONObject(key);
-								json.put("Value", config.getJSONObject(key).get("Value"));
-								System.out.println(key + " updated to " + config.getJSONObject(key).get("Value"));
-								newConfig.put(key, json);
-							}
-						}
-					}
-
-				} catch (JSONException e) {		
-					e.printStackTrace();
-				}
-				fos = new FileOutputStream(cfg);
-				fos.write(EncryptionFactory.encrypt(encryptKey, newConfig.toString().getBytes()));
-				fos.close();
-				Runtime.getRuntime().exec("sync");
-			}
-		} catch (FileNotFoundException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-
-		try {
-			if(cfg.exists()) {
-				FileInputStream fis = new FileInputStream(cfg);
-				byte[] b = new byte[fis.available()];
-				fis.read(b);
-				fis.close();
-				encryptedConfig = Base64.getEncoder().encodeToString(b);
-				b = EncryptionFactory.decrypt(encryptKey, b);
-				setHashMd5(new String(b));
-				config = new JSONObject(new String(b));
-			}
-		} catch (JSONException | IOException e) {
-			config = new JSONObject(configinfo.defaultConfig);
-		}
+		updateDefaultConfig(cfg); 
 		
-		//V0.44 add cipher
-		// init cipher here
-		try {
-			String plainText = config.getJSONObject("Station Name").getString("Value") + "_" + OCPP_TEXT + System.currentTimeMillis();
-			ClientEncryptUtil.setKEY_PUBLIC("./rsa_512.pub");
-			encryptedOCPPText = ClientEncryptUtil.encryptWithBase64URLSafeString(plainText);
-			encryptedOCPPText = URLEncoder.encode(encryptedOCPPText, "UTF-8");
-			Logger.writeln("encryptedOCPPText"+ encryptedOCPPText);
-		} catch (Exception e2) {
-			// TODO Auto-generated catch block
-			Logger.writeln("Error in Initialize encryptedOCPPText"+ e2);
-		};		
-		
-		Logger.writeln("CST Charger: version "+ configinfo.sVersion+" + "+configinfo.sVersionSim);
-		JSONObject ioSet = new JSONObject(configinfo.ioMap).getJSONObject(config.getJSONObject("Hardware Version").getString("Value"));
-		
-//		GPIO rcd = new GPIO(ioSet.getInt("RCD"), GPIO.PullMode.PULL_UP);
-//		GPIO rcdRst = new GPIO(ioSet.getInt("RCDRST"), GPIO.State.HIGH);
-//
-//		new Thread(new Runnable() {
-//
-//			@Override
-//			public void run() {
-//				while(true) {
-//					try {
-//						Thread.sleep(1);
-//					} catch (InterruptedException e) {
-//					}
-//					if(rcd.isHigh()) {
-//						System.out.println("RCD leak detected");
-//						try {
-//							Thread.sleep(5000);
-//						} catch (InterruptedException e) {
-//						}
-//						rcdRst.setState(GPIO.LOW);
-//						System.out.println("RCD resetted");
-//						rcdRst.setState(GPIO.HIGH);
-//					}
-//				}
-//			}
-//			
-//		}).start();
-		Point p;
-		needRestart = false;
-		rebootTask();
-			
-		if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
-
-			meterIC = new ADE7854A(new SPI(new GPIO(ioSet.getInt("ADE7854A_CS"), GPIO.State.HIGH), 50000, SPI.MODE3), new GPIO(ioSet.getInt("ADE7854A_IRQ0"), GPIO.PullMode.PULL_UP), new GPIO(ioSet.getInt("ADE7854A_IRQ1"), GPIO.PullMode.PULL_UP), new GPIO(ioSet.getInt("ADE7854A_RST"), GPIO.State.HIGH));		
-			meterIC.calibrate();
-			Logger.writeln("ADE7854A contructed");				
-			
-			powerChk = new PowerSupplyCheck(new GPIO(ioSet.getInt("AC_OK"), GPIO.PullMode.NO_PULL), new GPIO(ioSet.getInt("12V_OK"), GPIO.PullMode.NO_PULL), contactor, charger, "2_5");
-//			while(!powerChk.acReady()) {
-//				try {
-//					Thread.sleep(1000);
-//					Logger.writeln("Input AC power is not ready at startup, system is waiting...");		
-//				} catch (InterruptedException e) { 
-//					
-//				}
-//			}
-		
-			
-			while(!powerChk.dcOk()) {
-				try {
-					Thread.sleep(1000);
-					Logger.writeln("DC +12V is not ok at startup, system is waiting...");		
-				} catch (InterruptedException e) { 
-					
-				}
-			}		
-			
-				
-			
-		}		
-		
-//		if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
-//			meterIC = new ADE7854A(new SPI(new GPIO(ioSet.getInt("ADE7854A_CS"), GPIO.State.HIGH), 50000, SPI.MODE3), new GPIO(ioSet.getInt("ADE7854A_IRQ0"), GPIO.PullMode.PULL_UP), new GPIO(ioSet.getInt("ADE7854A_IRQ1"), GPIO.PullMode.PULL_UP), new GPIO(ioSet.getInt("ADE7854A_RST"), GPIO.State.HIGH));		
-//			Logger.writeln("ADE7854A contructed");					
-//		}			
-		
-		
-		if(config.getJSONObject("Over-Current Protection").getString("Value").equals("Yes")) {
-			//overCurrentChk = new OverCurrentCheck();
-			overCurrentChk = new OverCurrentCheck(System.currentTimeMillis(), config.getJSONObject("Default Capacity (A)").getInt("Value"));
-		}
-		
+		/* Variables Initialization */
 		this.cid = cid;
+		needRestart = false;
+		lprsMsgBuf = new ArrayList<String>();
 		idleUnlockInterval = config.getJSONObject("Auto Unlock Interval (ms)").getInt("Value");
 		unitPrice = 1.00;
 		unitLength = 15;
-
 		msgSerialBD = 10000;
 		msgSerial = 0;
 		msgSerialLprs = 0;
@@ -471,347 +314,41 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		backdoorReply = new JSONObject();
 		timeout = config.getJSONObject("Network Timeout (ms)").getInt("Value");
 		stopTransaction = new JSONArray();
+		configSecret = new StringBuffer();
+		lprsImgCapTimer = new PeriodTimer(0, 33);
 
-//		haveSession();
+		/* ChargingStation Set up start */
+		updateIoSet();	//Update GPIO configuration
+		Cipher_Init(); //V0.44 add cipher, init cipher here
+		rebootTask(); //Init reboot task - check if reboot is needed timely.
 		
-		if(config.getJSONObject("CardReader Type").getString("Value").equals("CLRC663")) {
-			if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
-				nfcReader = new CLRC663(new SPI(new GPIO(ioSet.getInt("CLRC663_CS"), GPIO.State.HIGH), 1000000, SPI.MODE0));
-			} else {
-				nfcReader = new CLRC663(new SPI(new GPIO(7, GPIO.State.HIGH), 1000000, SPI.MODE0));
-			}
-			
-		} else {
-			//nfcReader = new ACR122U();
-			nfcReader = new ACM1252U(1,1350,200,50);
-		}
-		nfcListener = new DataListener() {
-
-			@Override
-			public void dataReceived(DataEvent evt) {
-				final String cid = new String(evt.getData());
-				Logger.writeln("NFC read " + cid);
-				if(cid.equals("")) {
-					return;
-				}
-				if(cid.equalsIgnoreCase(config.getJSONObject("Admin Card").getString("Value")) && status == State.Ready) {
-					showConfig("Admin");
-				} else {
-					if(status == State.Authorize || isChargingSession()) {
-						if(status == State.Authorize) {
-							setState(State.Authorizing);
-						}
-						
-						JSONArray reply;
-						if(serverDown) {
-							Logger.writeln("NFC read serverDown");
-							reply = null;
-//							return;
-						} else {
-							Logger.writeln("NFC try to send");
-							reply = send(authorize(cid, OcppClient.NFC));
-						}
-						boolean selfAuth = false;
-						
-						if(reply == null) {
-							selfAuth = true;
-						} else {
-							try {
-								JSONObject json = reply.getJSONObject(2);
-								if(json == null) {
-									selfAuth = true;
-								}
-							} catch (JSONException e) {
-								selfAuth = true;
-							}
-						}
-						Logger.writeln("selfAuth: " + selfAuth);
-						if(selfAuth) {
-							if(isChargingSession()) {
-								for (int i = 0; i < adminCard.length; ++i) {
-									if(cid.equals(HexFactory.toString(adminCard[i], ""))) {
-										new Thread(new Runnable() {
+		Powermeter_Init();
+		overCurrentProtect_Init();	
 		
-											@Override
-											public void run() {
-												stopTransaction(cid, OCPP.Reason.Other);
-											}
+		nfcReader_Init();
+		nfcListener_Add();
 		
-										}).start();
-		
-										break;
-									}
-								}
-							} else {
-								authorizeConf(null);
-							}
-						} else {
-							if(status == State.Authorizing || isChargingSession()) {
-								authorizeConf(reply);
-							} else {
-								authorizeConf(null);
-							}
-						}
-					}
-				}
-			}
-		};
-		nfcReader.addDataListener(nfcListener);
-
-		if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_0")) {
-			statusLED = new LED(new WS2812B(new SPI(0, 6400000, SPI.MODE3)), 16);
-		} else if (config.getJSONObject("Hardware Version").getString("Value").equals("V1_6") ||config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") ){			
-			statusLED = new LED(new WS2812B(new SPI(new GPIO(23, GPIO.State.HIGH),0, 3200000, SPI.MODE3)), config.getJSONObject("Total LEDs number").getInt("Value"));
-		} else {
-			statusLED = new LED(new WS2811(new SPI(0, 6400000, SPI.MODE3)), 115);
-		}
-
+		LED_Init();
 		statusLED.setColor(ChargingStationUI.Orange);
 		
 		Logger.writeln("Setting up image");
-		Dimension size = new Dimension(1024, 600);
-		try {
-			if(config.getJSONObject("Window").getString("Value").equals("Shrink")) {
-				size = new Dimension(985, 560);
-			}
-		} catch (JSONException e) {
-		}
-		
-		
-		uiImage = new HashMap<String, Image>();
-		File[] images = new File("./resources/" + config.getJSONObject("Authentication").getString("Value")).listFiles();
-		if(images != null) {
-			for(int i = 0; i < images.length; ++i) {
-				if(images[i].isFile()) {
-					String key = images[i].getName();
-					key = key.substring(0,  key.lastIndexOf("."));
-					uiImage.put(key, Toolkit.getDefaultToolkit().getImage(images[i].getPath()));
-				}
-			}
-		}
-		images = new File("./resources/CST").listFiles();
-		for(int i = 0; i < images.length; ++i) {
-			if(images[i].isFile()) {
-				String key = images[i].getName();
-				key = key.substring(0,  key.lastIndexOf("."));
-				if(!uiImage.containsKey(key)) {
-					uiImage.put(key, Toolkit.getDefaultToolkit().getImage(images[i].getPath()));
-				}
-			}
-		}
-		
+		image_Init();
 		Logger.writeln("Setting up view");
-		try {
-			if(config.getJSONObject("Window").getString("Value").equals("Shrink")) {
-				view = new ChargingStationUI(new Point(8, 25), size);
-			} else {
-				view = new ChargingStationUI(new Point(0, 0), size);
-			}
-		} catch (JSONException e) {
-			view = new ChargingStationUI(new Point(0, 0), size);
-		}
-		
-		//view.showInfo(sVersionSim, Color.BLACK, new Font("Arial", Font.PLAIN, 36));
-		view.showInfo(configinfo.sVersion + "(" + configinfo.sVersionSim + ")", Color.BLACK, new Font("Arial", Font.PLAIN, 72));
+		startupView_set();
 
-		if(config.getJSONObject("Clock").getString("Value").equals("Show"))
-		new Thread(new Runnable() {
-			DateFormat dateTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-			@Override
-			public void run() {
-				while(true) {
-					int offset = config.getJSONObject("Time Zone").getInt("Value");
-					dateTime.setTimeZone(TimeZone.getTimeZone(ZoneId.of((offset >= 0 ? "+" : "") + offset)));
-					view.showTime(dateTime.format(new Date()));
-					try {
-						Thread.sleep(500);
-					} catch (InterruptedException e) {
-						Logger.writeln("dateTime: " + e.getMessage());
-					}
-				}
-			}
-
-			
-		}).start();
-		configSecret = new StringBuffer();
+		configmenuListener_Add(cfg);
+		mouserListener_Add();
 		
-		configListener = new DataListener() {
-
-			@Override
-			public void dataReceived(DataEvent evt) {
-				JSONObject event = new JSONObject(new String(evt.getData()));
-				Logger.writeln("configListener: " + event.toString(2));
-				String[] names = JSONObject.getNames(event);
-				for(int i = 0; i < names.length; ++i) {
-					if(config.has(names[i])) {
-						JSONObject json = config.getJSONObject(names[i]);
-						json.put("Value", event.get(names[i]));
-						config.put(names[i], json);
-					} else if(names[i].equals("Add")) {	
-						ocppServer.addCard(event.getString(names[i]));
-						view.updateConfig(getConfiguration());
-					} else if(names[i].equals("Remove")) {	
-						ocppServer.removeCard(event.getString(names[i]));
-						view.updateConfig(getConfiguration());
-					} else if(names[i].equals("Remove All")) {	
-						ocppServer.setAuthorizedList(new JSONObject());
-						view.updateConfig(getConfiguration());
-					} else if(names[i].equals("Restart")) {
-						needRestart = true;
-					} else if(names[i].equals("Reset")) {	
-						record.delete();
-						session.delete();
-//						meterReading.delete();
-//						meterReadingBak.delete();
-						if(ocppServer != null) {
-							ocppServer.reset();
-						}
-					} else if(names[i].equals("Clear Log")) {	
-						ocppServer.clearRecord();
-					} else if(names[i].equals("Register")) {
-						registerDevice();
-					} else if(names[i].equals("DateTime")) {
-						setSystemTime(event.getString("DateTime"));
-					} else {
-						NetworkInterface[] networkIface = NetworkManager.getPhysicalInterface();
-						for(int j = 0; j < networkIface.length; ++j) {
-							if(names[i].equals(networkIface[j].getName())) {
-								JSONObject param = event.getJSONObject(names[i]);
-								networkIface[j].setIP(param.getBoolean("DHCP"), param.getString("IP"), param.getString("Netmask"), param.getString("Gateway"));
-								if(networkIface[j].isWireless()) {
-									networkIface[j].setSSID(param.getString("SSID"), param.getString("Password"));
-								}
-							}
-						}
-					}
-				}
-				try {
-					FileOutputStream fos = new FileOutputStream(cfg);
-					fos.write(EncryptionFactory.encrypt(encryptKey, config.toString().getBytes()));
-					fos.close();
-					Runtime.getRuntime().exec("sync");  
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			}
-			
-		};
-		
-		view.addMouseListener(new MouseAdapter() {
-			
-			private Point lastMousePressed = new Point(0, 0);
-
-			@Override
-			public void mousePressed(MouseEvent arg0) {
-				double deltaX = arg0.getX() - lastMousePressed.getX();
-				double deltaY = arg0.getY() - lastMousePressed.getY();
-				lastMousePressed = new Point(arg0.getX(), arg0.getY());
-				if(deltaX == 0) {
-					deltaX = 1;
-				}
-				double theta = Math.toDegrees(Math.atan(deltaY / deltaX));
-				if(deltaX < 0) {
-					theta -= 180;
-				} else if(deltaX > 0 && deltaY > 0) {
-					theta -= 360;
-				}
-				theta *= -1;
-				int quadrant = ((int)(theta + 22.5) / 45) % 8;
-				configSecret.append(quadrant);
-				try {
-					if(configSecret.length() >= 13 && configSecret.substring(configSecret.length() - 13, configSecret.length() - 10).equals("460") && configSecret.subSequence(configSecret.length() - 9, configSecret.length() - 4).equals("46064") && configSecret.substring(configSecret.length() - 3, configSecret.length()).equals("046")) {						
-						showConfig("Admin");
-					} else if(configSecret.length() >= 9 && configSecret.substring(configSecret.length() - 9, configSecret.length() - 6).equals("460") && configSecret.subSequence(configSecret.length() - 5, configSecret.length()).equals("05036")) {
-						showConfig("Everyone");
-					}
-				} catch (IndexOutOfBoundsException e) {	
-				}
-  				while(configSecret.length() >= 20) {
-					configSecret.deleteCharAt(0);
-				}
-			}	
-		});
-		
-		//lprsImgCapTimer = new PeriodTimer(0, 200);
-		//lprsImgCapTimer = new PeriodTimer(0, 1000);
-		lprsImgCapTimer = new PeriodTimer(0, 33);
-		
+		Logger.writeln("Setting up OCPP server");	
+		ocppServer_Init();
+		configMenu_update();
+		/* ChargingStation Set up completed */
+	
+		/* ChargingStation Initialization start */
 		view.showImage(uiImage.get("Initialize"));
-		if(config.getJSONObject("Server Path").getString("Value").equals("ws://127.0.0.1:8086/ocpp/")) {
-			Logger.writeln("Setting up OCPP server");		
-			p = new Point(100, 100);	
-			ocppServer = new OcppServer(p, false, new File("."), config);
-			
-			if(config.getJSONObject("Authentication").getString("Value").equals("Key")) {
-				startKey = new GPIO(ioSet.getInt("Input4"), GPIO.PullMode.PULL_UP);
-				startKey.addActionListener(new ActionListener() {
-		
-					@Override
-					public void actionPerformed(ActionEvent evt) {
-						if(((GPIO)evt.getSource()).isLow()) {
-							ocppServer.remoteStartTransaction();
-						} else {
-							ocppServer.remoteStopTransaction();
-						}
-					}
-					
-				});
-			}
-		}
-		
-		try{
-		selectInterval = config.getJSONObject("Time Select Interval Min").getInt("Value");
-	    }catch(JSONException ex){
-	        Logger.writeln(ex);
-	        config.put("Time Select Interval Min", new JSONObject("{\"Type\":\"Range\",\"Authority\":\"Admin\",\"Value\":15,\"Option\":[1,30,5]}"));
-	    }
-		try {
-			config.getJSONObject("Custom Fields").getString("Value");
-		}catch(JSONException ex) {
-	        Logger.writeln(ex);
-	        config.put("Custom Fields", new JSONObject("{\"Type\":\"Selection\",\"Authority\":\"Admin\",\"Value\":\"Yes\",\"Option\":[\"Yes\",\"No\"]}"));
-		}
-		try {
-			config.getJSONObject("Enable CPError").getString("Value");
-		}catch(JSONException ex) {
-	        Logger.writeln(ex);
-	        config.put("Enable CPError", new JSONObject("{\"Type\":\"Selection\",\"Authority\":\"Admin\",\"Value\":\"Yes\",\"Option\":[\"Yes\",\"No\"]}"));
-		}
-		
-//		keyLed = new GPIO(ioSet.getInt("Output3"), GPIO.State.LOW);
-//		if(config.getJSONObject("Type").getString("Value").equals("Cable")) {
-//			lockKey = new GPIO(ioSet.getInt("Input3"), GPIO.PullMode.PULL_UP);
-//			lockKey.addActionListener(new ActionListener() {
-//	
-//				@Override
-//				public void actionPerformed(ActionEvent evt) {
-//					boolean keyState = ((GPIO)evt.getSource()).isLow();
-//					Logger.writeln("Lock key switched");
-//					charger.setCableLock(keyState);
-//				}
-//				
-//			});
-//			keyLed.setState(lockKey.isHigh() ? GPIO.HIGH : GPIO.LOW);
-//			keyLed.setState(GPIO.HIGH);
-//		}
-//		
-		
-		//2020-05-26 for re-enable "STOP" screen button start here
-	//	if(config.getJSONObject("Image").getString("Value").equals("SmartCharge")) {
-
-//20200728 remove unlock button for LPRS		
 		if(config.getJSONObject("Authentication").getString("Value").equals("Plug & Charge")) {
 
-			try{
-
-//				plugAndplayUnlock = new UnlockAndStop();
-//				Thread checkPlugAndPlayUnlock = new Thread(plugAndplayUnlock);
-//				try {
-//					checkPlugAndPlayUnlock.start();
-//				}catch(Exception e) {
-//					Logger.writeln("Error in Initialize plugAndplayUnlock");
-//				}				
-				
+			try{			
 				unlockButton = new SoftButton();
 				JButton unlockJButton = new JButton(new ImageIcon("./resources/CST/UnlockButton.png"));
 				unlockJButton.setPressedIcon(new ImageIcon("./resources/CST/UnlockButtonPressed.png"));	
@@ -827,10 +364,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 				
 					@Override
 					public void actionPerformed(ActionEvent evt) {
-						//Logger.writeln("StopTransaction by unlock button");
-						//stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.Local)));
-						
-						//plugAndplayUnlock.setNewAction(true);
 						if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
 							contactor.setState(false);
 						}else{
@@ -848,8 +381,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 			}catch (Exception e) {
 				Logger.writeln("Error init STOP button");	
 			}
-						
-			
 		}else {
 			try{
 		
@@ -2239,7 +1770,11 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 /**************************************************************************************************************************************/
 /************************************************   BASIC FUNCTIONS   ****************************************************************/
 /**************************************************************************************************************************************/
-	
+	/**
+	 * @Function checkAlreadyRunning()
+	 * @param null
+	 * @Description check if java file is running. 
+	 */		
 	private void checkAlreadyRunning() {
 		int count = 0;
 		String line;
@@ -2276,7 +1811,105 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	    	System.exit(0);
 	        return;
 		}
+	}	
+	
+	/**
+	 * @Function updateDefaultConfig()
+	 * @param cfg
+	 * @Description check if the config info is updated and update it if not. 
+	 */	
+	private void updateDefaultConfig(File cfg) {
+		try {
+			FileInputStream fis = new FileInputStream(new File("./config.default"));
+			byte[] b = new byte[fis.available()];
+			fis.read(b);
+			fis.close();
+			encryptedConfig = Base64.getEncoder().encodeToString(b);
+			setHashMd5(new String(EncryptionFactory.decrypt(encryptKey, b)));
+			if(!configinfo.defaultConfig.equals(new String(EncryptionFactory.decrypt(encryptKey, b)))) {
+				isConfigLatest = false;
+			}
+		} catch (IOException e) {
+			isConfigLatest = false;
+		}
+		// If config isn't the latest, update config
+		try {
+			if(!isConfigLatest) {
+				FileOutputStream fos = new FileOutputStream(new File("./config.default"));
+				fos.write(EncryptionFactory.encrypt(encryptKey, configinfo.defaultConfig.getBytes()));
+				fos.close();
+				JSONObject newConfig = new JSONObject(configinfo.defaultConfig);
+				try {
+					if(cfg.exists()) {
+						FileInputStream fis = new FileInputStream(cfg);
+						byte[] b = new byte[fis.available()];
+						fis.read(b);
+						fis.close();
+						encryptedConfig = Base64.getEncoder().encodeToString(b);
+						b = EncryptionFactory.decrypt(encryptKey, b);
+						setHashMd5(new String(b));
+						config = new JSONObject(new String(b));
+						java.util.Set<String> keyset = config.keySet();
+						
+						for(String key : config.keySet()) {
+							if(newConfig.has(key)) {
+								JSONObject json = newConfig.getJSONObject(key);
+								json.put("Value", config.getJSONObject(key).get("Value"));
+								System.out.println(key + " updated to " + config.getJSONObject(key).get("Value"));
+								newConfig.put(key, json);
+							}
+						}
+					}
+
+				} catch (JSONException e) {		
+					e.printStackTrace();
+				}
+				fos = new FileOutputStream(cfg);
+				fos.write(EncryptionFactory.encrypt(encryptKey, newConfig.toString().getBytes()));
+				fos.close();
+				Runtime.getRuntime().exec("sync");
+			}
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		try {
+			if(cfg.exists()) {
+				FileInputStream fis = new FileInputStream(cfg);
+				byte[] b = new byte[fis.available()];
+				fis.read(b);
+				fis.close();
+				encryptedConfig = Base64.getEncoder().encodeToString(b);
+				b = EncryptionFactory.decrypt(encryptKey, b);
+				setHashMd5(new String(b));
+				config = new JSONObject(new String(b));
+			}
+		} catch (JSONException | IOException e) {
+			config = new JSONObject(configinfo.defaultConfig);
+		}
+		Logger.writeln("CST Charger: version "+ configinfo.sVersion+" + "+configinfo.sVersionSim);		
 	}
+
+	/**
+	 * @Function initCipher()
+	 * @param null
+	 * @Description init Cipher. Add in v0.44 
+	 */	
+	private void Cipher_Init() {
+		try {
+			String plainText = config.getJSONObject("Station Name").getString("Value") + "_" + OCPP_TEXT + System.currentTimeMillis();
+			ClientEncryptUtil.setKEY_PUBLIC("./rsa_512.pub");
+			encryptedOCPPText = ClientEncryptUtil.encryptWithBase64URLSafeString(plainText);
+			encryptedOCPPText = URLEncoder.encode(encryptedOCPPText, "UTF-8");
+			Logger.writeln("encryptedOCPPText"+ encryptedOCPPText);
+		} catch (Exception e2) {
+			// TODO Auto-generated catch block
+			Logger.writeln("Error in Initialize encryptedOCPPText"+ e2);
+		};
+	}
+	
 	private boolean haveSession() {
 		Logger.writeln("haveRecordAndSession: " + "record.exists: " + record.exists() + " , session.exists: " + session.exists());
 
@@ -2328,6 +1961,11 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		}
 	}
 	
+	
+	private void updateIoSet() {
+		ioSet = new JSONObject(configinfo.ioMap).getJSONObject(config.getJSONObject("Hardware Version").getString("Value")); //update hardware version
+	}
+	
 	private void rebootTask() {
 		new Timer().schedule(new TimerTask() {
 
@@ -2350,6 +1988,201 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		}, 0, 5000);
 	}
 	
+	private void Powermeter_Init(){
+		if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
+			ADE7854A_Init();					
+			dc12V_Check();
+		} //Need further development	
+	}
+	
+	private void ADE7854A_Init() {
+		meterIC = new ADE7854A(new SPI(new GPIO(ioSet.getInt("ADE7854A_CS"), GPIO.State.HIGH), 50000, SPI.MODE3), new GPIO(ioSet.getInt("ADE7854A_IRQ0"), GPIO.PullMode.PULL_UP), new GPIO(ioSet.getInt("ADE7854A_IRQ1"), GPIO.PullMode.PULL_UP), new GPIO(ioSet.getInt("ADE7854A_RST"), GPIO.State.HIGH));		
+		meterIC.calibrate();
+		Logger.writeln("ADE7854A contructed");
+	}
+	
+	private void dc12V_Check() {
+		powerChk = new PowerSupplyCheck(new GPIO(ioSet.getInt("AC_OK"), GPIO.PullMode.NO_PULL), new GPIO(ioSet.getInt("12V_OK"), GPIO.PullMode.NO_PULL), contactor, charger, "2_5");
+		
+		while(!powerChk.dcOk()) {
+			try {
+				Thread.sleep(1000);
+				Logger.writeln("DC +12V is not ok at startup, system is waiting...");		
+			} catch (InterruptedException e) { 
+				
+			}
+		}	
+	}
+	
+	private void overCurrentProtect_Init() {
+		if(config.getJSONObject("Over-Current Protection").getString("Value").equals("Yes")) {
+			//overCurrentChk = new OverCurrentCheck();
+			overCurrentChk = new OverCurrentCheck(System.currentTimeMillis(), config.getJSONObject("Default Capacity (A)").getInt("Value"));
+		}	
+	}
+	
+	private void nfcReader_Init() {
+		if(config.getJSONObject("CardReader Type").getString("Value").equals("CLRC663")) {
+			if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
+				nfcReader = new CLRC663(new SPI(new GPIO(ioSet.getInt("CLRC663_CS"), GPIO.State.HIGH), 1000000, SPI.MODE0));
+			} else {
+				nfcReader = new CLRC663(new SPI(new GPIO(7, GPIO.State.HIGH), 1000000, SPI.MODE0));
+			}
+			
+		} else {
+			//nfcReader = new ACR122U();
+			nfcReader = new ACM1252U(1,1350,200,50);
+		}
+	}
+	
+	private void nfcListener_Add() {
+		nfcListener = new DataListener() {
+
+			@Override
+			public void dataReceived(DataEvent evt) {
+				final String cid = new String(evt.getData());
+				Logger.writeln("NFC read " + cid);
+				if(cid.equals("")) {
+					return;
+				}
+				if(cid.equalsIgnoreCase(config.getJSONObject("Admin Card").getString("Value")) && status == State.Ready) {
+					showConfig("Admin");
+				} else {
+					if(status == State.Authorize || isChargingSession()) {
+						if(status == State.Authorize) {
+							setState(State.Authorizing);
+						}
+						
+						JSONArray reply;
+						if(serverDown) {
+							Logger.writeln("NFC read serverDown");
+							reply = null;
+						} else {
+							Logger.writeln("NFC try to send");
+							reply = send(authorize(cid, OcppClient.NFC));
+						}
+						boolean selfAuth = false;
+						
+						if(reply == null) {
+							selfAuth = true;
+						} else {
+							try {
+								JSONObject json = reply.getJSONObject(2);
+								if(json == null) {
+									selfAuth = true;
+								}
+							} catch (JSONException e) {
+								selfAuth = true;
+							}
+						}
+						Logger.writeln("selfAuth: " + selfAuth);
+						if(selfAuth) {
+							if(isChargingSession()) {
+								for (int i = 0; i < adminCard.length; ++i) {
+									if(cid.equals(HexFactory.toString(adminCard[i], ""))) {
+										new Thread(new Runnable() {
+		
+											@Override
+											public void run() {
+												stopTransaction(cid, OCPP.Reason.Other);
+											}
+		
+										}).start();
+		
+										break;
+									}
+								}
+							} else {
+								authorizeConf(null);
+							}
+						} else {
+							if(status == State.Authorizing || isChargingSession()) {
+								authorizeConf(reply);
+							} else {
+								authorizeConf(null);
+							}
+						}
+					}
+				}
+			}
+		};
+		nfcReader.addDataListener(nfcListener);
+	}
+	
+	private void LED_Init() {
+		if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_0")) {
+			statusLED = new LED(new WS2812B(new SPI(0, 6400000, SPI.MODE3)), 16);
+		} else if (config.getJSONObject("Hardware Version").getString("Value").equals("V1_6") ||config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") ){			
+			statusLED = new LED(new WS2812B(new SPI(new GPIO(23, GPIO.State.HIGH),0, 3200000, SPI.MODE3)), config.getJSONObject("Total LEDs number").getInt("Value"));
+		} else {
+			statusLED = new LED(new WS2811(new SPI(0, 6400000, SPI.MODE3)), 115);
+		}
+	}
+	
+	private void image_Init() {
+		
+		try {
+			if(config.getJSONObject("Window").getString("Value").equals("Shrink")) {
+				size = new Dimension(985, 560);
+			}
+		} catch (JSONException e) {
+		}
+		
+		
+		uiImage = new HashMap<String, Image>();
+		File[] images = new File("./resources/" + config.getJSONObject("Authentication").getString("Value")).listFiles();
+		if(images != null) {
+			for(int i = 0; i < images.length; ++i) {
+				if(images[i].isFile()) {
+					String key = images[i].getName();
+					key = key.substring(0,  key.lastIndexOf("."));
+					uiImage.put(key, Toolkit.getDefaultToolkit().getImage(images[i].getPath()));
+				}
+			}
+		}
+		images = new File("./resources/CST").listFiles();
+		for(int i = 0; i < images.length; ++i) {
+			if(images[i].isFile()) {
+				String key = images[i].getName();
+				key = key.substring(0,  key.lastIndexOf("."));
+				if(!uiImage.containsKey(key)) {
+					uiImage.put(key, Toolkit.getDefaultToolkit().getImage(images[i].getPath()));
+				}
+			}
+		}	
+	}
+	
+	private void startupView_set() {
+		try {
+			if(config.getJSONObject("Window").getString("Value").equals("Shrink")) {
+				view = new ChargingStationUI(new Point(8, 25), size);
+			} else {
+				view = new ChargingStationUI(new Point(0, 0), size);
+			}
+		} catch (JSONException e) {
+			view = new ChargingStationUI(new Point(0, 0), size);
+		}
+		
+		//view.showInfo(sVersionSim, Color.BLACK, new Font("Arial", Font.PLAIN, 36));
+		view.showInfo(configinfo.sVersion + "(" + configinfo.sVersionSim + ")", Color.BLACK, new Font("Arial", Font.PLAIN, 72));
+		if(config.getJSONObject("Clock").getString("Value").equals("Show"))
+		new Thread(new Runnable() {
+			DateFormat dateTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			@Override
+			public void run() {
+				while(true) {
+					int offset = config.getJSONObject("Time Zone").getInt("Value");
+					dateTime.setTimeZone(TimeZone.getTimeZone(ZoneId.of((offset >= 0 ? "+" : "") + offset)));
+					view.showTime(dateTime.format(new Date()));
+					try {
+						Thread.sleep(500);
+					} catch (InterruptedException e) {
+						Logger.writeln("dateTime: " + e.getMessage());
+					}
+				}
+			}
+		}).start();
+	}
 	private void updateTimeBtn(boolean enableTimeSelect, boolean enableStartBtn, boolean enableResetBtn) {
 		Image upwardBtn;
 		Image downwardBtn;
@@ -2521,7 +2354,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		view.hideQueueing();
 		queueingMode = false;
 	}
-
 	
 	private void showConfig(String permission) {
 		isShowConfig = true;
@@ -2904,6 +2736,150 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		return payload;
 	}
 
+	
+	private void configmenuListener_Add(File cfg) {
+		configListener = new DataListener() {
+			@Override
+			public void dataReceived(DataEvent evt) {
+				JSONObject event = new JSONObject(new String(evt.getData()));
+				Logger.writeln("configListener: " + event.toString(2));
+				String[] names = JSONObject.getNames(event);
+				for(int i = 0; i < names.length; ++i) {
+					if(config.has(names[i])) {
+						JSONObject json = config.getJSONObject(names[i]);
+						json.put("Value", event.get(names[i]));
+						config.put(names[i], json);
+					} else if(names[i].equals("Add")) {	
+						ocppServer.addCard(event.getString(names[i]));
+						view.updateConfig(getConfiguration());
+					} else if(names[i].equals("Remove")) {	
+						ocppServer.removeCard(event.getString(names[i]));
+						view.updateConfig(getConfiguration());
+					} else if(names[i].equals("Remove All")) {	
+						ocppServer.setAuthorizedList(new JSONObject());
+						view.updateConfig(getConfiguration());
+					} else if(names[i].equals("Restart")) {
+						needRestart = true;
+					} else if(names[i].equals("Reset")) {	
+						record.delete();
+						session.delete();
+//						meterReading.delete();
+//						meterReadingBak.delete();
+						if(ocppServer != null) {
+							ocppServer.reset();
+						}
+					} else if(names[i].equals("Clear Log")) {	
+						ocppServer.clearRecord();
+					} else if(names[i].equals("Register")) {
+						registerDevice();
+					} else if(names[i].equals("DateTime")) {
+						setSystemTime(event.getString("DateTime"));
+					} else {
+						NetworkInterface[] networkIface = NetworkManager.getPhysicalInterface();
+						for(int j = 0; j < networkIface.length; ++j) {
+							if(names[i].equals(networkIface[j].getName())) {
+								JSONObject param = event.getJSONObject(names[i]);
+								networkIface[j].setIP(param.getBoolean("DHCP"), param.getString("IP"), param.getString("Netmask"), param.getString("Gateway"));
+								if(networkIface[j].isWireless()) {
+									networkIface[j].setSSID(param.getString("SSID"), param.getString("Password"));
+								}
+							}
+						}
+					}
+				}
+				try {
+					FileOutputStream fos = new FileOutputStream(cfg);
+					fos.write(EncryptionFactory.encrypt(encryptKey, config.toString().getBytes()));
+					fos.close();
+					Runtime.getRuntime().exec("sync");  
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			
+		};
+	}
+
+	private void mouserListener_Add() {
+		view.addMouseListener(new MouseAdapter() {
+			
+			private Point lastMousePressed = new Point(0, 0);
+
+			@Override
+			public void mousePressed(MouseEvent arg0) {
+				double deltaX = arg0.getX() - lastMousePressed.getX();
+				double deltaY = arg0.getY() - lastMousePressed.getY();
+				lastMousePressed = new Point(arg0.getX(), arg0.getY());
+				if(deltaX == 0) {
+					deltaX = 1;
+				}
+				double theta = Math.toDegrees(Math.atan(deltaY / deltaX));
+				if(deltaX < 0) {
+					theta -= 180;
+				} else if(deltaX > 0 && deltaY > 0) {
+					theta -= 360;
+				}
+				theta *= -1;
+				int quadrant = ((int)(theta + 22.5) / 45) % 8;
+				configSecret.append(quadrant);
+				try {
+					if(configSecret.length() >= 13 && configSecret.substring(configSecret.length() - 13, configSecret.length() - 10).equals("460") && configSecret.subSequence(configSecret.length() - 9, configSecret.length() - 4).equals("46064") && configSecret.substring(configSecret.length() - 3, configSecret.length()).equals("046")) {						
+						showConfig("Admin");
+					} else if(configSecret.length() >= 9 && configSecret.substring(configSecret.length() - 9, configSecret.length() - 6).equals("460") && configSecret.subSequence(configSecret.length() - 5, configSecret.length()).equals("05036")) {
+						showConfig("Everyone");
+					}
+				} catch (IndexOutOfBoundsException e) {	
+				}
+  				while(configSecret.length() >= 20) {
+					configSecret.deleteCharAt(0);
+				}
+			}	
+		});
+	}
+	
+	private void ocppServer_Init() {
+		if(config.getJSONObject("Server Path").getString("Value").equals("ws://127.0.0.1:8086/ocpp/")) {	
+			p = new Point(100, 100);	
+			ocppServer = new OcppServer(p, false, new File("."), config);
+			
+			if(config.getJSONObject("Authentication").getString("Value").equals("Key")) {
+				startKey = new GPIO(ioSet.getInt("Input4"), GPIO.PullMode.PULL_UP);
+				startKey.addActionListener(new ActionListener() {
+		
+					@Override
+					public void actionPerformed(ActionEvent evt) {
+						if(((GPIO)evt.getSource()).isLow()) {
+							ocppServer.remoteStartTransaction();
+						} else {
+							ocppServer.remoteStopTransaction();
+						}
+					}
+					
+				});
+			}
+		}
+	}
+	
+	private void configMenu_update() {
+		try{
+			selectInterval = config.getJSONObject("Time Select Interval Min").getInt("Value");
+	    }catch(JSONException ex){
+	        Logger.writeln(ex);
+	        config.put("Time Select Interval Min", new JSONObject("{\"Type\":\"Range\",\"Authority\":\"Admin\",\"Value\":15,\"Option\":[1,30,5]}"));
+	    }
+		try {
+			config.getJSONObject("Custom Fields").getString("Value");
+		}catch(JSONException ex) {
+	        Logger.writeln(ex);
+	        config.put("Custom Fields", new JSONObject("{\"Type\":\"Selection\",\"Authority\":\"Admin\",\"Value\":\"Yes\",\"Option\":[\"Yes\",\"No\"]}"));
+		}
+		try {
+			config.getJSONObject("Enable CPError").getString("Value");
+		}catch(JSONException ex) {
+	        Logger.writeln(ex);
+	        config.put("Enable CPError", new JSONObject("{\"Type\":\"Selection\",\"Authority\":\"Admin\",\"Value\":\"Yes\",\"Option\":[\"Yes\",\"No\"]}"));
+		}
+	}
 	@Override
 	public void dataReceived(DataEvent evt) {
 	}
@@ -3415,8 +3391,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
  		}
  	}
 
-
-	
 	private JSONArray send(JSONArray msg) {
 		if(msg == null) {
 			return null;
@@ -4363,8 +4337,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 			sendBackdoor(bootNotification);
 		}
 	}
-	
-	
+		
 	private synchronized JSONArray startTransaction(String id) {
 		this.id = new OCPP.IdToken(id);
 		JSONArray payload = new JSONArray();
@@ -4495,7 +4468,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		}
 	}
 	
-
 	private void startTransactionConf(JSONArray a) {
 		Logger.writeln("startTransactionConf JSONArray:" + a);
 		if(a == null || a.length() == 0) {
@@ -5360,7 +5332,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		});
 	}
 		
-	
 	private OCPP.ChargingProfileStatus updateChargingProfile(ChargingProfile profile) {
 		if(profile.getChargingProfilePurpose() == OCPP.ChargingProfilePurposeType.TxProfile) {
 			Logger.writeln("UCP 1");
@@ -5717,8 +5688,6 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 		}
 	}	
 	
-
-
 	private void sendOutLprsMessage(String msg) {	
 		if(housingSocietyLprsSocket == null) {
 			try {
@@ -5943,8 +5912,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 			}
 		}, 5, period, TimeUnit.SECONDS);
 	}
-	
-	
+		
 //	public class UnlockAndStop implements Runnable{
 //		
 //		private boolean newAction = false;
