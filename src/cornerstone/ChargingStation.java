@@ -79,7 +79,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 /**********************************************************************************************************************/
 	
 	ChargingStationConfig configinfo = new ChargingStationConfig();	
-	private Point p;
+	private Point p = new Point(0,0);
 	private JSONObject ioSet;
 	private Dimension size = new Dimension(1024, 600);
 	private static String encryptKey = "CsT403.403";
@@ -106,6 +106,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 //	private FsWebcamDevice webcam;
 	private ChargingStationUI view;
 	private Contactor contactor;
+	private boolean[] contactorMode;
 	private DataListener barcodeListener;
 	private DataListener nfcListener;
 	private IECCharger charger;
@@ -113,6 +114,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private GPIO lockKey;
 	private GPIO startKey;
 	private GPIO eStopHardButton;				// Emergency Stop Hard Button
+	private GPIO[] contactorControl;
 //	private PowerMeter powerMeter;
 	private PowerMeter powerMeter2;
 	private NTCThermister JT103;
@@ -122,7 +124,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	//Settings
 	private JSONObject config;
 	private JSONObject lmsConfig;
-	private StringBuffer configSecret;
+	private StringBuffer configSecret = new StringBuffer();
 	private int idleUnlockInterval;
 	private int timeout;
 
@@ -151,6 +153,8 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private int unitLength;
 	private double unitPrice;
 	private double chargingFee;
+	private PWMPort cp;
+	private GPIO lock, lock2, lockState;	
 	
 	private int timeSelectRemain;
 	private String timeRemainDesc;
@@ -172,7 +176,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private Thread imgsTxClient;
 	private int msgSerialLprs;
 	private int msgSerialLprsTimeSync;
-	private ArrayList<String> lprsMsgBuf;
+	private ArrayList<String> lprsMsgBuf = new ArrayList<String>();
 	private long tMark;
 	private final long TIMESYNC_PERIOD = 120*1000;
 	final boolean LPRS_MSGBUF_INCR = true;
@@ -187,8 +191,8 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private boolean isOperative;
 	private OCPP.ReserveNow reservation;
 //	private JsonObject serverReply;
-	private JSONObject serverReply;
-	private JSONObject backdoorReply;
+	private JSONObject serverReply = new JSONObject();
+	private JSONObject backdoorReply = new JSONObject();
 //	private String socket;
 //	private WebSocketClient socket;
 //	private String backdoorSocket;
@@ -199,15 +203,9 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private Color ledColor = LEDConfig.UIOrange;	
 	private ImgSend imgTx ; 
 //	private JsonArray stopTransaction;
-	private volatile JSONArray stopTransaction;
+	private volatile JSONArray stopTransaction = new JSONArray();
 	private final ReadWriteLock stLock = new ReentrantReadWriteLock();
-	private Map<String, Image> uiImage;
-//	private JButton tsBtn1;
-//	private JButton tsBtn2;
-//	private JButton tsBtn3;
-//	private JButton tsBtn4;
-//	private JButton tsBtn5;
-//	private JButton tsBtn6;	
+	private Map<String, Image> uiImage;	
 	private JButton addHour;
 	private JButton minusHour;
 	private JButton addMin;
@@ -233,7 +231,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	boolean plugAndChargeUnlock=false;
 	boolean buttonUnlock=false;	
 	private final ReadWriteLock remoteCall = new ReentrantReadWriteLock();
-	private PeriodTimer lprsImgCapTimer;
+	private PeriodTimer lprsImgCapTimer = new PeriodTimer(0, 33);
 //	private ImageTx imgSend;
 	private int imgcnt=0;
 	private String encryptedOCPPText = "";	
@@ -256,6 +254,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private double chargerEnergy = 0;
 	private double chargerCurrentConsumption = 0.2;			// estimated current consumption of charger itself, not from power meter reading; can be adjusted in configuration menu  
 	private double chargerTotalPowerFactor = 0;		
+	private int overcurrentMargin = 0;
 	
 	private boolean keepOnCamCapture = true; // Update by cam capture thread, set to false if can't open cam number of times.	
 	private int queueingNum = 0;
@@ -275,6 +274,16 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	private PowerCheckListener powerCheckListener;	
 	private ADE7854A meterIC;
 	
+	private OCPP.ChargingSchedulePeriod[] schedulePeriods;
+	private ADCDevice adc;
+	private Operation[] cpScaler;
+	private Operation[] ppScaler;
+	private Operation[] tempScaler;
+	private PowerMeter powerMeter;
+	private GPIO estopGpio[];
+	private int[] channels;
+	private boolean runLPRS;
+	private int cpErrorCntThreshold;
 /**********************************************************************************************************************/
 /*********************************************  FUNCTION  *************************************************************/
 /**********************************************************************************************************************/	
@@ -294,51 +303,45 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	 * @Function ChargingStation()
 	 * @param cfg,cid 
 	 */
-	
 	public ChargingStation(File cfg, int cid){
-		/*update default configuration*/
-		checkAlreadyRunning();
-		updateDefaultConfig(cfg); 
-		
-		/* Variables Initialization */
+		/*Variables Initialization*/
 		this.cid = cid;
 		needRestart = false;
-		lprsMsgBuf = new ArrayList<String>();
-		idleUnlockInterval = config.getJSONObject("Auto Unlock Interval (ms)").getInt("Value");
+		cp = null;
+		lock = null;
+		lock2 = null; 
+		lockState = null;	
 		unitPrice = 1.00;
 		unitLength = 15;
 		msgSerialBD = 10000;
 		msgSerial = 0;
 		msgSerialLprs = 0;
-		serverReply = new JSONObject();
-		backdoorReply = new JSONObject();
+		
+		/*Check configuration update*/
+		checkAlreadyRunning();
+		updateDefaultConfig(cfg); 
+		/* Variables update */
+		idleUnlockInterval = config.getJSONObject("Auto Unlock Interval (ms)").getInt("Value");
 		timeout = config.getJSONObject("Network Timeout (ms)").getInt("Value");
-		stopTransaction = new JSONArray();
-		configSecret = new StringBuffer();
-		lprsImgCapTimer = new PeriodTimer(0, 33);
-
-		/* ChargingStation Set up start */
-		updateIoSet();	//Update GPIO configuration
-		Cipher_Init(); //V0.44 add cipher, init cipher here
+		
+		/* ChargingStation Basic Initialization */
 		rebootTask(); //Init reboot task - check if reboot is needed timely.
+		GPIO_Config();	//Update GPIO configuration
+		Cipher_Init(); //V0.44 add cipher, init cipher here
 		
 		Powermeter_Init();
 		overCurrentProtect_Init();	
-		
 		nfcReader_Init();
 		nfcListener_Add();
-		
 		LED_Init();
 		statusLED.setColor(ChargingStationUI.Orange);
-		
 		Logger.writeln("Setting up image");
 		image_Init();
 		Logger.writeln("Setting up view");
+		
 		startupView_set();
-
 		configmenuListener_Add(cfg);
 		mouserListener_Add();
-		
 		Logger.writeln("Setting up OCPP server");	
 		ocppServer_Init();
 		configMenu_update();
@@ -346,1424 +349,49 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	
 		/* ChargingStation Initialization start */
 		view.showImage(uiImage.get("Initialize"));
-		if(config.getJSONObject("Authentication").getString("Value").equals("Plug & Charge")) {
-
-			try{			
-				unlockButton = new SoftButton();
-				JButton unlockJButton = new JButton(new ImageIcon("./resources/CST/UnlockButton.png"));
-				unlockJButton.setPressedIcon(new ImageIcon("./resources/CST/UnlockButtonPressed.png"));	
-				unlockJButton.setContentAreaFilled(false);
-				unlockJButton.setBorderPainted(false);
-				unlockJButton.setBounds(view.getUIConfig("ui_config/unlockJButton/x"), view.getUIConfig("ui_config/unlockJButton/y"), view.getUIConfig("ui_config/unlockJButton/w"), view.getUIConfig("ui_config/unlockJButton/h"));
-					
-				unlockButton.setSoftButton(unlockJButton);						
-				view.add(unlockButton.getSoftButton(),0);
-				view.revalidate();
-		
-				unlockButton.getSoftButton().addActionListener(new ActionListener() {
-				
-					@Override
-					public void actionPerformed(ActionEvent evt) {
-						if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
-							contactor.setState(false);
-						}else{
-							if(contactor.getState()) {
-								contactor.setState(false);
-							}							
-						}
-						plugAndChargeUnlock = true;
-						charger.setCableLock(false);
-					}
-	
-				});
-				unlockButton.setVisible(false);		
-			
-			}catch (Exception e) {
-				Logger.writeln("Error init STOP button");	
-			}
-		}else {
-			try{
-		
-				unlockButton = new SoftButton();
-				JButton unlockJButton = new JButton(new ImageIcon("./resources/CST/UnlockButton.png"));
-				unlockJButton.setPressedIcon(new ImageIcon("./resources/CST/UnlockButtonPressed.png"));
-				unlockJButton.setContentAreaFilled(false);
-				unlockJButton.setBorderPainted(false);
-				unlockJButton.setBounds(view.getUIConfig("ui_config/unlockJButton/x"), view.getUIConfig("ui_config/unlockJButton/y"), view.getUIConfig("ui_config/unlockJButton/w"), view.getUIConfig("ui_config/unlockJButton/h"));
-					
-				unlockButton.setSoftButton(unlockJButton);						
-				view.add(unlockButton.getSoftButton(),0);
-				view.revalidate();
-		
-				unlockButton.getSoftButton().addActionListener(new ActionListener() {
-				
-					@Override
-					public void actionPerformed(ActionEvent evt) {
-						//Logger.writeln("Unlock by STOP button");
-						buttonUnlock=true;
-						charger.setCableLock(false);
-					}
-	
-				});
-				unlockButton.setVisible(false);		
-
-
-			
-			}catch (Exception e) {
-				Logger.writeln("Error init STOP button");	
-			}
-		//2020-05-26 for re-enable "STOP" screen button	end here
-	}
-		
-		
-		p = new Point(0, 0);
+		unlockButton_Init();
+		unlockButtonListener_Add();
 		if(config.getJSONObject("UART Port").getString("Value").equals("RS232")) {
-			SerialAdapter barcodeSerial = new SerialAdapter("/dev/ttyS0", 9600, p, false);
-			barcodeSerial.setName("barcode");
-			barcode = new DS9208(barcodeSerial);
-			barcodeListener = new DataListener() {
-	
-				@Override
-				public void dataReceived(DataEvent evt) {
-					Logger.writeln("Barcode read " + new String(evt.getData()));
-					if(new String(evt.getData()).equals("")) {
-						return;
-					}
-					if(status == State.Authorize) {
-						setState(State.Authorizing);
-					}
-					if(serverDown) {
-						Logger.writeln("Self authorize @ no reply");
-						authorizeConf(null);
-					} else {
-						authorizeConf(send(authorize(new String(evt.getData()), OcppClient.QRCODE)));
-					}
-				}
-	
-			};
+			barcode_Init();
+			barcodeListener_Add();
 		}
-		
 		Logger.writeln("Setting up EVSE");
-		try {
-			chargerCurrentConsumption = ((double)config.getJSONObject("Charger current consumption(mA)").getInt("Value"))/1000;
-			Logger.writeln("Charger current consupmtion setting is :" +chargerCurrentConsumption);
-			int overcurrentMargin = config.getJSONObject("Over-Current Margin(%)").getInt("Value");
-			Logger.writeln("Over current margin is :" +overcurrentMargin);
-		}catch (Exception e) {
-			Logger.writeln("Error in getting Charger current consupmtion & overcurrent margin in configuration!");
-		}		
-		
-		PWMPort cp = null;
-		GPIO lock = null, lock2 = null, lockState = null;		
-		try {
-			GPIO[] contactorControl;
-			if(config.getJSONObject("Hardware Version").getString("Value").equals("V1_5") || config.getJSONObject("Hardware Version").getString("Value").equals("V1_6")) {
-				GPIO enableL1 = new GPIO(ioSet.getInt("EnableL1"), GPIO.State.LOW);
-				GPIO enableN = new GPIO(ioSet.getInt("EnableN"), GPIO.State.LOW);
-				GPIO enableL2L3 = new GPIO(ioSet.getInt("EnableL2L3"), GPIO.State.LOW);
-			//	GPIO enable31 = new GPIO(ioSet.getInt("Enable31"), GPIO.State.LOW);				
-
-				contactorControl= new GPIO[3];
-				contactorControl[0] = enableN;
-				contactorControl[1] = enableL1;
-				contactorControl[2] = enableL2L3;
-				//contactorControl[3] = enable31;
-				
-				boolean[] contactorMode = new boolean[3];
-				switch(config.getJSONObject("Phase").getString("Value")) {
-				case "3 Phase":
-					Logger.writeln("Setting up 3 phase contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = true;
-					contactorMode[2] = true;
-				//	contactorMode[3] = false;
-					break;
-				case "1 Phase (L3)":
-					Logger.writeln("Setting up 1 phase (L3) contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = true;
-					contactorMode[2] = false;
-					//contactorMode[3] = false;
-					break;
-				case "1 Phase (L2)":
-					Logger.writeln("Setting up 1 phase (L2) contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = true;
-					contactorMode[2] = false;
-					//contactorMode[3] = false;
-					break;
-				case "1 Phase (L1)":
-				default:
-					Logger.writeln("Setting up 1 phase (L1) contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = true;
-					contactorMode[2] = false;
-					//contactorMode[3] = false;
-					break;
-				}
-				contactor = new Contactor(contactorControl, contactorMode, 1000);
-				
-				new Thread(new Runnable() {
-
-					@Override
-					public void run() {
-						contactor.setState(true);
-						try {
-							Thread.sleep(1000);
-						} catch (InterruptedException e) {
-							Logger.writeln("contactor: " + e.getMessage());
-						}
-						contactor.setState(false);
-					}
-					
-				}).start();				
-				
-			}else if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
-				GPIO rl1_en = new GPIO(ioSet.getInt("RL1_EN"), GPIO.State.LOW);
-				GPIO rl2_en = new GPIO(ioSet.getInt("RL2_EN"), GPIO.State.LOW);		
-
-				contactorControl= new GPIO[2];
-				contactorControl[0] = rl1_en;				// RL1_EN must be at index 0 for maintaining on/off sequence
-				contactorControl[1] = rl2_en;				// RL2_EN must be at index 1 for maintaining on/off sequence
-				
-				boolean[] contactorMode = new boolean[2];
-				switch(config.getJSONObject("Phase").getString("Value")) {
-				case "3 Phase":
-					Logger.writeln("Setting up 3 phase contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = true;
-					break;
-				case "1 Phase (L3)":
-					Logger.writeln("Setting up 1 phase (L3) contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = false;
-					break;
-				case "1 Phase (L2)":
-					Logger.writeln("Setting up 1 phase (L2) contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = true;
-					break;
-				case "1 Phase (L1)":
-				default:
-					Logger.writeln("Setting up 1 phase (L1) contactor");
-					contactorMode[0] = true;
-					contactorMode[1] = false;
-					break;
-				}
-				//contactor = new Contactor(contactorControl, contactorMode, 1000, Contactor.CONTROL_SCHEME_V2);				
-				GPIO[] contReadIO = new GPIO[2];
-				contReadIO[0] = new GPIO(ioSet.getInt("RL1_STATUS"), GPIO.PullMode.NO_PULL);
-				contReadIO[1] = new GPIO(ioSet.getInt("RL2_STATUS"), GPIO.PullMode.NO_PULL);
-				contactor = new Contactor(contactorControl, contReadIO, contactorMode, 1000, Contactor.CONTROL_SCHEME_V2);
-
-/*	//remove power on on-off test for aligning IEC 61851 requirement			
-				new Thread(new Runnable() {
-
-					@Override
-					public void run() {
-						int numOfPhase = 1;
-						int retrial=0;
-						int maxRetrial = 2;
-						if(config.getJSONObject("Phase").getString("Value").equals("3 Phase")) {
-							numOfPhase = 3;
-						}else {
-							numOfPhase = 1;
-						}
-						
-						contactor.setState(true);	
-						Logger.writeln("Power up turn ON contactor") ;
-//						retrial = 2;
-//						while(!contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase) && (retrial<maxRetrial)) {
-//							try {
-//								Thread.sleep(1000);
-//							} catch (InterruptedException e) {
-//							}	
-//							contactor.setState(true);
-//							retrial++;
-//							Logger.writeln("Power up closing contactor fail, retrial no. "+retrial);
-//							
-//						}
-//						if(!contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase)) {
-//								Logger.writeln("Power up closing contactor failure..");
-//								contactor.setOperationNormal(false);
-//						}					
-						
-						try {
-							Thread.sleep(1000);
-						} catch (InterruptedException e) {
-						}
-						contactor.setState(false);
-						Logger.writeln("Power up turn OFF contactor") ;
-						
-//						retrial = 2;
-//						while(contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase) && (retrial<maxRetrial)) {
-//							try {
-//								Thread.sleep(1000);
-//							} catch (InterruptedException e) {
-//							}	
-//							contactor.setState(false);
-//							retrial++;
-//							Logger.writeln("Power up open contactor fail, retrial no. "+retrial);
-//						}
-//						if(contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase)) {
-//								Logger.writeln("Power up open contactor failure..");
-//								contactor.setOperationNormal(false);
-//						}					
-					}
-					
-				}).start();				
-*/				
-			} else {
-				
-				GPIO enable1 = new GPIO(ioSet.getInt("Enable1"), GPIO.State.LOW);
-				GPIO enable2 = new GPIO(ioSet.getInt("Enable2"), GPIO.State.LOW);
-				GPIO enable21 = new GPIO(ioSet.getInt("Enable21"), GPIO.State.LOW);
-				GPIO enable31 = new GPIO(ioSet.getInt("Enable31"), GPIO.State.LOW);
-				Logger.writeln("Hardware version: "+config.getJSONObject("Hardware Version").getString("Value"));
-				Logger.writeln("IO pin enable1 : "+ioSet.getInt("Enable1"));
-				Logger.writeln("IO pin enable2 : "+ioSet.getInt("Enable2"));
-				Logger.writeln("IO pin enable21 : "+ioSet.getInt("Enable21"));
-				Logger.writeln("IO pin enable31 : "+ioSet.getInt("Enable31"));
-				
-				if(config.getJSONObject("Hardware Version").getString("Value").equals("V0_3")) {
-					GPIO enable3 = new GPIO(ioSet.getInt("Enable3"), GPIO.State.LOW);
-					contactorControl= new GPIO[5];
-					contactorControl[0] = enable21;
-					contactorControl[1] = enable31;
-					contactorControl[2] = enable1;
-					contactorControl[3] = enable2;
-					contactorControl[4] = enable3;
-					
-					boolean[] contactorMode = new boolean[5];
-					switch(config.getJSONObject("Phase").getString("Value")) {
-					case "3 Phase":
-						Logger.writeln("Setting up 3 phase contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = false;
-						contactorMode[2] = true;
-						contactorMode[3] = true;
-						contactorMode[4] = true;
-						break;
-					case "1 Phase (L3)":
-						Logger.writeln("Setting up 1 phase (L3) contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = true;
-						contactorMode[2] = false;
-						contactorMode[3] = false;
-						contactorMode[4] = false;
-						break;
-					case "1 Phase (L2)":
-						Logger.writeln("Setting up 1 phase (L2) contactor");
-						contactorMode[0] = true;
-						contactorMode[1] = false;
-						contactorMode[2] = false;
-						contactorMode[3] = false;
-						contactorMode[4] = false;
-						break;
-					case "1 Phase (L1)":
-					default:
-						Logger.writeln("Setting up 1 phase (L1) contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = false;
-						contactorMode[2] = true;
-						contactorMode[3] = false;
-						contactorMode[4] = false;
-						break;
-					}
-					contactor = new Contactor(contactorControl, contactorMode, 1000);
-	
-					new Thread(new Runnable() {
-	
-						@Override
-						public void run() {
-							contactor.setState(true);
-							try {
-								Thread.sleep(1000);
-							} catch (InterruptedException e) {
-								Logger.writeln("contactor: " + e.getMessage());
-							}
-							contactor.setState(false);
-						}
-						
-					}).start();
-				} else if(config.getJSONObject("Hardware Version").getString("Value").equals("V1_0")) {
-					contactorControl= new GPIO[4];
-					contactorControl[0] = enable21;
-					contactorControl[1] = enable31;
-					contactorControl[2] = enable1;
-					contactorControl[3] = enable2;
-					
-					boolean[] contactorMode = new boolean[4];
-					switch(config.getJSONObject("Phase").getString("Value")) {
-					case "3 Phase":
-						Logger.writeln("Setting up 3 phase contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = false;
-						contactorMode[2] = true;
-						contactorMode[3] = true;
-						break;
-					case "1 Phase (L3)":
-						Logger.writeln("Setting up 1 phase (L3) contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = true;
-						contactorMode[2] = false;
-						contactorMode[3] = false;
-						break;
-					case "1 Phase (L2)":
-						Logger.writeln("Setting up 1 phase (L2) contactor");
-						contactorMode[0] = true;
-						contactorMode[1] = false;
-						contactorMode[2] = false;
-						contactorMode[3] = false;
-						break;
-					case "1 Phase (L1)":
-					default:
-						Logger.writeln("Setting up 1 phase (L1) contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = false;
-						contactorMode[2] = true;
-						contactorMode[3] = false;
-						break;
-					}
-					contactor = new Contactor(contactorControl, contactorMode, 1000);
-					
-					new Thread(new Runnable() {
-	
-						@Override
-						public void run() {
-							contactor.setState(true);
-							try {
-								Thread.sleep(1000);
-							} catch (InterruptedException e) {
-								Logger.writeln("contactor: " + e.getMessage());
-							}
-							contactor.setState(false);
-						}
-						
-					}).start();
-				}else {
-					contactorControl= new GPIO[4];
-					contactorControl[0] = enable21;
-					contactorControl[1] = enable31;
-					contactorControl[2] = enable1;
-					contactorControl[3] = enable2;
-					
-					boolean[] contactorMode = new boolean[4];
-					switch(config.getJSONObject("Phase").getString("Value")) {
-					case "3 Phase":
-						Logger.writeln("Setting up 3 phase contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = false;
-						contactorMode[2] = true;
-						contactorMode[3] = true;
-						break;
-					case "1 Phase (L3)":
-						Logger.writeln("Setting up 1 phase (L3) contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = true;
-						contactorMode[2] = false;
-						contactorMode[3] = false;
-						break;
-					case "1 Phase (L2)":
-						Logger.writeln("Setting up 1 phase (L2) contactor");
-						contactorMode[0] = true;
-						contactorMode[1] = false;
-						contactorMode[2] = false;
-						contactorMode[3] = false;
-						break;
-					case "1 Phase (L1)":
-					default:
-						Logger.writeln("Setting up 1 phase (L1) contactor");
-						contactorMode[0] = false;
-						contactorMode[1] = false;
-						contactorMode[2] = true;
-						contactorMode[3] = false;
-						break;
-					}
-					contactor = new Contactor(contactorControl, contactorMode, 0);
-				}
-				
-			}
-			
-//			if(config.getJSONObject("Type").getString("Value").equals("Socket")) {
-				lock = new GPIO(ioSet.getInt("Lock"), GPIO.State.LOW);
-//			} else {
-//				lock = new GPIO(ioSet.getInt("Lock"), lockKey.isLow() ? GPIO.State.HIGH : GPIO.State.LOW);
-//			}
-			if((config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )){
-				lock2 = new GPIO(ioSet.getInt("Lock2"), GPIO.State.LOW);
-				lockState = new GPIO(ioSet.getInt("LockState"), GPIO.PullMode.NO_PULL);
-				Logger.writeln("Lock2 GPIO initialized");
-			}else {
-				lockState = new GPIO(ioSet.getInt("LockState"), GPIO.PullMode.PULL_UP);
-			}
-
-			if((config.getJSONObject("Hardware Version").getString("Value").equals("V1_0") )|| (config.getJSONObject("Hardware Version").getString("Value").equals("V1_5")) || config.getJSONObject("Hardware Version").getString("Value").equals("V1_6") || (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) ) {
-				lockState.setMode(GPIO.INVERTED);
-				Logger.writeln("Lock state GPIO logic set inverted");
-			}
-
-			cp = new PWMPort(ioSet.getInt("CP"));
-//			PWMPort pwm1 = new PWMPort(1);
-//	    	pwm1.setFrequency(1000);
-//			pwm1.setDuty(75);
-		} catch(GpioPinExistsException e) {
-			Logger.writeln("Contactor GPIO error");
-		}
-		
-		OCPP.ChargingSchedulePeriod[] schedulePeriods = new OCPP.ChargingSchedulePeriod[1];
-		switch(config.getJSONObject("Phase").getString("Value")) {
-		case "3 Phase":
-			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 3);
-			break;
-		case "1 Phase (L3)":
-			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 1);
-			break;
-		case "1 Phase (L2)":
-			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 1);
-			break;
-		case "1 Phase (L1)":
-		default:
-			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 1);
-			break;
-		}
-		defaultProfile = new OCPP.ChargingProfile(1, 0, OCPP.ChargingProfilePurposeType.TxDefaultProfile, OCPP.ChargingProfileKindType.Absolute, new OCPP.ChargingSchedule(OCPP.ChargingRateUnitType.W, schedulePeriods));
-		currentProfile = defaultProfile;
-
+		currentConsumption_set();
+		overcurrentMargin_set();		
+		contactor_Init();
+		ChargingSchedulePeriod_set();
+		Profile_set();
 		Logger.writeln("Setting up ADC");
-		ADCDevice adc;	
-//		Operation[] cpScaler = new Operation[2];
-		if(config.getJSONObject("Hardware Version").getString("Value").equals("V0_3")) {
-			Operation[] cpScaler = new Operation[2];
-			adc = new AD7888(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 3400);
-			cpScaler[0] = new Operation("*", 8);
-			cpScaler[1] = new Operation("-", 12000);
-			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));			
-		} else if((config.getJSONObject("Hardware Version").getString("Value").equals("V1_0")) || (config.getJSONObject("Hardware Version").getString("Value").equals("V1_5") || config.getJSONObject("Hardware Version").getString("Value").equals("V1_6"))) {
-			Operation[] cpScaler = new Operation[2];
-			adc = new MCP3208(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 5000);
-			cpScaler[0] = new Operation("*", -8);
-			cpScaler[1] = new Operation("+", 12000);
-			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
-		} else if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
-			//Operation[] cpScaler = new Operation[3];
-			Operation[] cpScaler = new Operation[4];		// To be resumed to array size of 3 for final hardware!!
-			adc = new MCP3208(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 5000);
-			/*
-			cpScaler[0] = new Operation("*", 60);
-			cpScaler[1] = new Operation("-", 150000);
-			cpScaler[2] = new Operation("/", 11);
-			cpScaler[3] = new Operation("+", 1010);		// add for first PCBA sample only!! to be removed for final hardware!!
-*/
-			/*
-			cpScaler[0] = new Operation("*", 5058);
-			cpScaler[1] = new Operation("/", 1000);
-			cpScaler[2] = new Operation("-", 12484);
-			cpScaler[3] = new Operation("+", 0);	
-			*/
-			cpScaler[0] = new Operation("*", 1);
-			cpScaler[1] = new Operation("*", 1);
-			cpScaler[2] = new Operation("*", 1);
-			cpScaler[3] = new Operation("*", 1);			
-			
-			
-			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
-
-		} else {
-			Operation[] cpScaler = new Operation[2];			
-			adc = new MCP3208(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 5000);
-			cpScaler[0] = new Operation("*", -5.10638);
-			cpScaler[1] = new Operation("+", 12804);
-			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
-		}
-//		adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
-
-		Operation[] ppScaler = new Operation[4];
-		ppScaler[0] = new Operation("max", 1);
-		ppScaler[1] = new Operation("1/x", ioSet.getInt("ADC_REFERENCE"));
-		ppScaler[2] = new Operation("-", 1);
-		ppScaler[3] = new Operation("1/x", ioSet.getInt("PROXIMITY_PULLUP"));
-		adc.setScaler(ioSet.getInt("ADC_PP"), new Scaler(ppScaler));
-
-		Operation[] tempScaler = new Operation[4];
-		tempScaler[0] = new Operation("max", 1);
-		tempScaler[1] = new Operation("1/x", 5000);
-		tempScaler[2] = new Operation("-", 1);
-		tempScaler[3] = new Operation("1/x", 3000);
-		adc.setScaler(ioSet.getInt("ADC_TEMP"), new Scaler(tempScaler));		
-		JT103 = new NTCThermister(adc.getADCChannel(ioSet.getInt("ADC_TEMP")), 10000, 3435);
-
+		ADC_cp_Init();
+		ADC_pp_Init();
+		ADC_temp_Init();
 		Logger.writeln("Setting up power meter");
-		double meterInitial = 0;
-		if(meterReading.exists()) {
-			FileInputStream fis;
-			try {
-				fis = new FileInputStream(meterReading);
-				byte[] b = new byte[fis.available()];
-				fis.read(b);
-				fis.close();
-				meterInitial = Double.parseDouble(new String(b));
-			} catch (IOException e) {
-			} catch (NumberFormatException e) {
-				try {
-					fis = new FileInputStream(meterReadingBak);
-					byte[] b = new byte[fis.available()];
-					fis.read(b);
-					fis.close();
-					meterInitial = Double.parseDouble(new String(b));
-				} catch(IOException e1) {
-				}
-			}
-		}
-		PowerMeter powerMeter = null;
-		if(config.getJSONObject("Powermeter Type").getString("Value").equals("ADE7754")) {
-			powerMeter = new ADE7754(new SPI(new GPIO(ioSet.getInt("PowerMeter"), GPIO.State.HIGH), 1000000, SPI.MODE1), JT103, (1000000 + 1000) / 1000, (100000 + 24000) / 24000, meterInitial);
-			powerMeter.calibrate();
-		}else if (config.getJSONObject("Powermeter Type").getString("Value").equals("ADE7854A")) {
-			 powerMeter = meterIC.getMeter();
-		} else {
-			SerialAdapter serial;
-			if( config.getJSONObject("Hardware Version").getString("Value").equals("V1_6") || config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
-				if(config.getJSONObject("Offboard Powermeter Link").getString("Value").equals("RS485")) {
-					serial = new SerialAdapter("/dev/ttyS0", 9600, new Point(0, 0), false, true, new GPIO(ioSet.getInt("RS485_DIR"), GPIO.State.LOW), true);
-				}else {
-					serial = new SerialAdapter("/dev/ttyUSB0", 9600);
-					Logger.write("USB to serial adaptor enabled");
-				}
-			} else if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_0")) {
-				if(config.getJSONObject("Offboard Powermeter Link").getString("Value").equals("RS485")) {
-					serial = new SerialAdapter("/dev/ttyS0", 9600);
-				}else {
-					serial = new SerialAdapter("/dev/ttyUSB0", 9600);
-				}
-			} else {
-				serial = new SerialAdapter("/dev/ttyUSB0", 9600);
-			}
-			if(config.getJSONObject("Powermeter Type").getString("Value").equals("SPM91")) {
-				powerMeter = new SPM91(serial, Integer.parseInt(config.getJSONObject("Powermeter ID").getString("Value")));
-			} else if(config.getJSONObject("Powermeter Type").getString("Value").equals("SPM93")) {
-				powerMeter = new SPM93(serial, Integer.parseInt(config.getJSONObject("Powermeter ID").getString("Value")));
-			}
-//			powerMeter2 = new ADE7754(new SPI(new GPIO(ioSet.getInt("PowerMeter"), GPIO.State.HIGH), 1000000, SPI.MODE1), JT103, (1000000 + 1000) / 1000, (100000 + 24000) / 24000, meterInitial);
-//			new Timer().schedule(new TimerTask() {
-//			
-//				@Override
-//				public void run() {
-//					powerMeter2.calibrate();
-//				}
-//			
-//			}, 2000);
-		}
-		
-		if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {	
-			charger = new IECCharger(powerMeter, config.getJSONObject("Type").getString("Value").equals("Socket") ? IECCharger.SOCKET : IECCharger.CABLE,
-					cp,	adc.getADCChannel(ioSet.getInt("ADC_CP"), ADCChannel.ALGO_FILTER1), adc.getADCChannel(ioSet.getInt("ADC_PP"), ADCChannel.ALGO_ADDSERIAL),
-					lock, lock2, lockState, LOCKVER, config.getJSONObject("Maximum Capacity (A)").getInt("Value"), IECCharger.CP_IDLE_TYPE2, 10);
-			Logger.writeln("V2.5 charger initialized");
-			
-		}else {		
-				charger = new IECCharger(powerMeter, config.getJSONObject("Type").getString("Value").equals("Socket") ? IECCharger.SOCKET : IECCharger.CABLE,
-						cp,	adc.getADCChannel(ioSet.getInt("ADC_CP")), adc.getADCChannel(ioSet.getInt("ADC_PP")),
-						lock, lockState, config.getJSONObject("Maximum Capacity (A)").getInt("Value"));
-		}
-
-
-		if((config.getJSONObject("Hardware Version").getString("Value").equals("V2_5"))) {
-			GPIO estopGpio[] = new GPIO[1];
-			estopGpio[0] = new GPIO(ioSet.getInt("ESTOP"), GPIO.PullMode.NO_PULL);
-			estop = new EStop(estopGpio);
-			//estopStatus = new GPIO(ioSet.getInt("ESTOP"), GPIO.State.HIGH);
-			estopStatus = estopGpio[0];
-			Logger.writeln("ESTOP GPIO initialized");
-			
-			
-			if(estopStatus.isLow()) {
-				Logger.writeln("ESTOP triggered detected at started up");
-				int numOfPhase=1;
-				fault = FaultState.ESTOP_TRIGGERED;
-				estop.setTriggerState(true);
-				if(config.getJSONObject("Phase").getString("Value").equals("3 Phase")) {
-					numOfPhase = 3;
-				}else {
-					numOfPhase = 1;
-				}
-				
-				contactor.setState(false);
-//				if(contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase)) {
-//					Logger.writeln("ESTOP triggered while contactors detected still closed, try re-open them again on more time..");
-//					contactor.setState(false);
-//					contactor.setOperationNormal(false);
-//				}
-				
-				if(charger.isLocked()) {
-					Logger.writeln("ESTOP triggered at startup and cable locked, open IEC lock");
-					view.showImage(uiImage.get("Emergency_button_pressed_halt"));
-					charger.setCableLock(false);
-				}else {
-					criticalFaultTriggered = true;
-					Logger.writeln("ESTOP triggered, originally unlocked and no unlock action");
-					view.showImage(uiImage.get("EStopHalt"));
-				}
-				//view.showImage(uiImage.get("Emergency_button_pressed_halt"));						
-			}			
-			
-			estopStatus.addActionListener(new ActionListener() {
-	    		
-				@Override
-				public void actionPerformed(ActionEvent evt) {
-					Logger.writeln("ESTOP triggered detected");
-					if(estopStatus.isLow()) {
-						int numOfPhase=1;
-						fault = FaultState.ESTOP_TRIGGERED;
-						estop.setTriggerState(true);
-						if(config.getJSONObject("Phase").getString("Value").equals("3 Phase")) {
-							numOfPhase = 3;
-						}else {
-							numOfPhase = 1;
-						}
-						
-						contactor.setState(false);
-//						if(contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase)) {
-//							Logger.writeln("ESTOP triggered while contactors detected still closed, try re-open them again on more time..");
-//							contactor.setState(false);
-//							contactor.setOperationNormal(false);
-//						}
-						
-						if(charger.isLocked()) {
-							view.showImage(uiImage.get("Emergency_button_pressed_halt"));
-							charger.setCableLock(false);
-							Logger.writeln("ESTOP triggered, open IEC lock");
-						}else {
-							criticalFaultTriggered = true;
-							Logger.writeln("ESTOP triggered, originally unlocked and no unlock action");
-							view.showImage(uiImage.get("EStopHalt"));
-						}
-						//view.showImage(uiImage.get("Emergency_button_pressed_halt"));						
-					}
-				}
-	    		
-	    	});	
-		}		
-				
-
-
+		Powermeter_set();
+		charger_Init();
+		ADC_start();
 		if(config.getJSONObject("Type").getString("Value").equals("Socket")) {
-			charger.addLockListener(new LockStateListener() {
-	
-				@Override
-				public void locked(ChangeEvent evt) {
-					if(config.getJSONObject("Type").getString("Value").equals("Socket")) {
-						if(charger.getState() == IECCharger.STATE_B) {
-							////unlockButton.setVisible(true);							//2020-05-26 for re-enable "STOP" screen button	end here
-							setState(State.Locked);
-						} else {
-							charger.setCableLock(false);
-						}
-					}
-					if(keyLed != null) {
-						keyLed.setState(GPIO.HIGH);
-					}
-				}
-	
-				@Override
-				public void lockFailed(ChangeEvent evt) {
-					Logger.writeln("lockFailed event handling");
-					setState(State.Replug);
-				}
-	
-				@Override
-				public void unlocked(ChangeEvent evt) {
-					Logger.writeln("Unlock event handling");
-					
-					if(plugUnlockTimer != null) {
-						plugUnlockTimer.cancel();
-					}
-					
-					if(config.getJSONObject("Type").getString("Value").equals("Socket")) {
-						if(isChargingSession()) {
-							if(plugAndChargeUnlock || buttonUnlock) {
-								plugAndChargeUnlock = false;
-								buttonUnlock = false;
-								stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.Local)));		// add for unlock button at plug & charge
-							}else {
-								stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.EVDisconnected)));
-							}
-						}
-		
-						unlockButton.setVisible(false);						//2020-05-26 for re-enable "STOP" screen button	end here
-						// TODO
-						if(status != State.Initialize && status != State.Unavailable && status != State.NetworkDown) {
-							switch(charger.getState()) {
-							case Charger.STATE_CABLE_DISCONNECT:
-								setState(State.Ready);
-								break;
-							case Charger.STATE_CABLE_CONNECT:
-//								setState(State.Plugging);
-//								break;
-							case Charger.STATE_B:
-							case Charger.STATE_C:
-							case Charger.STATE_D:
-								setState(State.Unlocked);
-								break;
-							case Charger.STATE_N:
-								break;
-							default:
-								break;
-							}
-						}
-					}
-					if(keyLed != null) {
-						keyLed.setState(GPIO.LOW);
-					}
-				}
-	
-				
-				@Override
-				public void unlockFailed(ChangeEvent evt) {
-					if(status != State.Initialize && status != State.Unavailable && status != State.NetworkDown) {
-						setState(State.Unlock);
-					}
-				}
-	
-			});
+			lockListener_Add();
 		}
-		if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
-			int[] channels = new int[1];
-			channels[0] = ioSet.getInt("ADC_PP");
-			//adc.startConversion(1010, channels);
-			adc.startConversion(510, channels);		//20210505 
-		}else {
-			adc.startConversion(1010);
+		if((config.getJSONObject("Hardware Version").getString("Value").equals("V2_5"))) {
+			estop_set();
+			dcPowerCheck_Init();
+			acPowerCheck_Init();
 		}
+		/* ChargingStation Initialization completed */
 		
 		WebSocketClient.addListener(config.getJSONObject("Server Path").getString("Value") + config.getJSONObject("Station Name").getString("Value") + "?cipher=" + encryptedOCPPText, this);
 		WebSocketClient.addListener(config.getJSONObject("Backdoor Server").getString("Value") + config.getJSONObject("Serial No").getString("Value") + "?cipher=" + encryptedOCPPText, this);
-
 		if(!config.getJSONObject("LPRS").getString("Value").equals("0.0.0.0")) {
-			housingSocietyLprsListener = new Thread(new Runnable() {
-				
-				@Override
-				public void run() {
-					String reply = "";
-					while(true) {
-						try {
-							if(housingSocietyLprsIS.available() > 0) {
-								byte[] b = new byte[housingSocietyLprsIS.available()];
-								housingSocietyLprsIS.read(b);
-								reply = new String(b);
-								System.out.println(reply);
-								EvseLprsAckMsg msg = new Gson().fromJson(reply, EvseLprsAckMsg.class);
-								//setSystemTime(msg.getTimestamp());
-								setSystemTimeLprs(msg.getTimestamp());		//2020-09-26 slightly modified for sending start up time sync request
-							}
-						} catch(JsonSyntaxException e1 ) {
-							Logger.writeln("Bad LPRS Acknowledge message : " + reply);
-						} catch (NullPointerException | IOException e) {
-						}
-						try {
-							Thread.sleep(500);
-						} catch (InterruptedException e) {
-							e.printStackTrace();
-							Logger.writeln("config: " + e.getMessage());
-						}
-					}
-				}
-				
-			});
-			housingSocietyLprsListener.start();
-			
-		/// 20200624 remove to adapter NEC LPRS 
-//			if(!config.getJSONObject("LPRS Engine").getString("Value").equals("0.0.0.0")) {
-//				lprs = new AsiaVisionLPRS(config.getJSONObject("LPRS Engine").getString("Value"));
-//				lprs.addDataListener(new DataListener() {
-//	
-//					@Override
-//					public void dataReceived(DataEvent evt) {
-//							EvseLprsMsg msg = new EvseLprsMsg(++msgSerialLprs, config.getJSONObject("Station Name").getString("Value"), "LPData", new String(evt.getData()), OCPP.dateTime.format(new Date()));
-//							sendLprsMessage(new Gson().toJson(msg));
-//					}
-//					
-//				});
-//			}
-//				
-			
+			housingSocietyLprsListener_add();
 		}
-		
-		
-		
-		boolean runLPRS = true;
-		//String ipc = config.getJSONObject("LPRS Engine").getString("Value").toString();
-		if( (config.getJSONObject("LPRS Engine").getString("Value").equals("0.0.0.0") && (config.getJSONObject("LPRS").getString("Value").equals("0.0.0.0")))){
-			runLPRS = false;
-		}
-		
-		if(runLPRS || config.getJSONObject("Authentication").getString("Value").equals("Subscription")) {		
-		//if(runLPRS || (!config.getJSONObject("Authentication").getString("Value").equals("Plug & Charge"))) {
-		//if(runLPRS ) {	
-			try {
-				camera = new Camera();
-				// webcam = Webcam.getDefault();
-				// webcam.setViewSize(new Dimension(640, 480));
-				//webcam.setViewSize(new Dimension(800, 600));
-				//webcam.setCustomViewSizes(new Dimension(1280, 720));
-				//webcam.setCustomViewSizes  (new Dimension[] { WebcamResolution.HD.getSize() });
-				//((WebCamDevice) webcam)).setResolution(new Dimension[] { WebcamResolution.VGA.getSize() }); // register custom size
-				//	webcam.setParameters(parameters);
-			}catch (Throwable e) {
-				StringWriter errors = new StringWriter();
-				e.printStackTrace(new PrintWriter(errors));
-	
-				Logger.writeln("Problem init webacam "+errors.toString());			
-			}
-			
-			Logger.writeln("camera captured enabled");
-			
-			
-			String lprsRxHost = config.getJSONObject("LPRS Engine").getString("Value");
-			int Lprsport = 4445;
-			
-			if(runLPRS) {
-				
-				try {
-					Lprsport = config.getJSONObject("LPRS Engine Port").getInt("Value");
-					Logger.writeln("LPRS engine port "+Lprsport);
-				} catch (Exception e) {
-					Logger.writeln("Error in getting LPRS engine port");
-				}
-
-
-				lprsTimeSyncThread = new Thread(new Runnable() {
-					int repeatCnt = 0;
-					@Override
-					public void run() {
-
-		        		try {
-		        			Thread.sleep(5000);
-		        		}catch(Exception e ) {
-		        		}	
-						EvseLprsMsg msg0 = new EvseLprsMsg(++msgSerialLprsTimeSync, config.getJSONObject("Station Name").getString("Value"), "SyncTime","", OCPP.dateTime.format(new Date()));
-						//sendLprsMessage(new Gson().toJson(msg0));
-						incrDecrLprsMessageBuf(new Gson().toJson(msg0), LPRS_MSGBUF_INCR);
-						Logger.writeln("add power up lprs time sync request");
-						
-		        		try {
-		        			Thread.sleep(2000);
-		        		}catch(Exception e ) {
-		        		}				
-
-		        		tMark = System.currentTimeMillis();
-			        	while(true) {
-			        		
-			    			if(System.currentTimeMillis()<tMark) {				// to handle any problem due to incorrect system time reset/re-sync
-			    				tMark = System.currentTimeMillis();
-			    				Logger.writeln("lprs process time mark manullay reset to current time");
-			    			}
-			        		
-			        		if((System.currentTimeMillis() - tMark) >= TIMESYNC_PERIOD) {
-			        			tMark = System.currentTimeMillis();
-								EvseLprsMsg msg = new EvseLprsMsg(++msgSerialLprsTimeSync, config.getJSONObject("Station Name").getString("Value"), "SyncTime","", OCPP.dateTime.format(new Date()));
-								//sendLprsMessage(new Gson().toJson(msg));
-								incrDecrLprsMessageBuf(new Gson().toJson(msg), LPRS_MSGBUF_INCR);
-			        			Logger.writeln("add periodic lprs time sync request");
-			        		}
-			        		try {
-			        			Thread.sleep(2000);
-			        		}catch(Exception e ) {
-			        		}
-			        	}
-			        }
-				});
-				lprsTimeSyncThread.start();
-				imgTx =  new ImgSend(lprsRxHost, Lprsport, config.getJSONObject("Station Name").getString("Value"));
-				
-			}
-			
-						
-			
-
-
-			barcodeReadThread = new Thread(new Runnable() {
-				private long readtime = 0;
-				private String code;
-				private int DEBOUNCE = 2000;
-				
-				@Override
-				public void run() {
-					while(keepOnCamCapture) {
-						try {
-							if(status == State.Authorize || status == State.Charging || status == State.Pause) {
-								
-								if(cameraImage != null) {
-//									BufferedImage tempImg = cameraImage;
-//									resize(cameraFrame, 336 ,252)
-//									BufferedImage tempImg = resize(convertToType(cameraImage, BufferedImage.TYPE_BYTE_GRAY), 336 ,252);
-									BufferedImage tempImg = convertToType(cameraImage, BufferedImage.TYPE_BYTE_GRAY);
-//									String newcode = null;
-									String newcode = BarcodeFactory.decode(tempImg);
-									tempImg = null;
-									
-									if(newcode != null) {
-										Logger.writeln("Camera read " + newcode);
-										if(!newcode.equals(code)) {
-											code = newcode;
-											readtime = System.currentTimeMillis();
-											if(status == State.Authorize || isChargingSession()) {
-												if(status == State.Authorize) {
-													setState(State.Authorizing);
-												}
-												authorizeConf(send(authorize(code, OcppClient.QRCODE)));
-											}
-										} else {
-											readtime = System.currentTimeMillis();
-										}
-										System.out.println("readtime: " + readtime);
-									} else {
-//										Logger.writeln("Camera read not hit");
-										if(System.currentTimeMillis() - readtime > DEBOUNCE) {
-											code = null;
-										}
-									}
-								}else {
-									Logger.writeln("No buffer image for QR Code Scan, go to sleep");
-									Thread.sleep(5000);
-								}
-							} else {
-								Thread.sleep(500);
-							}
-						} catch (InterruptedException e) {
-							Logger.writeln("barcodeReadThread InterruptedException: " + e.getMessage());
-						} catch (Exception e) {
-							Logger.writeln("barcodeReadThread Exception: " + e.getMessage());
-						}
-					}
-				}	
-			});		
-			
-			cameraCaptureThread = new Thread(new Runnable() {
-				@Override
-				public void run() {
-					long t = System.currentTimeMillis();
-					int barcodeCount = 0;
-					int camResetCounter = 0;
-					while(keepOnCamCapture) {		
-						if(lprsImgCapTimer.isTimesUp()) {
-							lprsImgCapTimer.resetTimer();
-							barcodeCount = barcodeCount >= 30 ? 1 : barcodeCount + 1;
-							
-							
-							
-							if(!camera.isOpen()) {
-								camResetCounter += 1;
-								Logger.writeln("cam closed and open again:" + camResetCounter);
-								camera.open();
-								try {
-									Thread.sleep(1000);
-								} catch (InterruptedException e) {
-								}													
-							}
-							
-							
-							if(camResetCounter > 10) {
-								Logger.writeln("Cam Capture Disabled Due To Connection Issue.");
-								keepOnCamCapture = false;
-							}
-								
-							
-							if(camera.isOpen()) {
-								try {
-//									System.out.println(System.currentTimeMillis() - t);
-									t = System.currentTimeMillis();	
-								            
-									if (config.getJSONObject("Authentication").getString("Value").equals("Subscription") && status == State.Authorize)	
-									{
-										cameraImage = camera.getImage();
-										cameraFrame = convertToType(cameraImage, BufferedImage.TYPE_3BYTE_BGR);
-										AffineTransform tx = AffineTransform.getScaleInstance(-1, 1);
-										tx.translate(-cameraImage.getWidth(null), 0);
-										AffineTransformOp op = new AffineTransformOp(tx, AffineTransformOp.TYPE_NEAREST_NEIGHBOR);
-										BufferedImage pip = op.filter(cameraFrame, null);
-										pip = resize(pip, 336 ,252);
-										
-										if(status == State.Authorize) {	// Authorize state may be changed here after reading the cam image, e.g. after unlock button action 
-											view.showPIP(pip);
-										}		
-									}else if(( status != State.Authorize) &&(status != State.Authorizing)){
-										try {
-											cameraImage = camera.getImage();
-											BufferedImage frameBW = convertToType(cameraImage, BufferedImage.TYPE_BYTE_GRAY);
-											if(( status != State.Authorize) &&(status != State.Authorizing)) {	
-									        	if(imgTx != null) {
-									        		imgTx.process(frameBW);
-									        	}
-											}
-											}catch (Exception e) {
-												Logger.writeln("error in adding capture image");
-												camResetCounter += 1;
-											}
-										
-										if ( (config.getJSONObject("Authentication").getString("Value").equals("Subscription") && status == State.Charging) ||
-											 (config.getJSONObject("Authentication").getString("Value").equals("Subscription") && status == State.Pause)
-										) {
-											cameraImage = camera.getImage();
-											cameraFrame = convertToType(cameraImage, BufferedImage.TYPE_3BYTE_BGR);
-											AffineTransform tx = AffineTransform.getScaleInstance(-1, 1);
-											tx.translate(-cameraImage.getWidth(null), 0);
-											AffineTransformOp op = new AffineTransformOp(tx, AffineTransformOp.TYPE_NEAREST_NEIGHBOR);
-											BufferedImage pip = op.filter(cameraFrame, null);
-											pip = ChargingStation.resize(pip, 224 ,168);
-											
-											if(status == State.Charging || status == State.Pause) {				
-												view.showPIP(pip, 500, 430);
-											}
-										}
-									}			
-								} catch (Exception e) {
-									e.printStackTrace();
-								}
-							} else {
-								try {
-									Logger.writeln("delay 1s for closed cam");
-									Thread.sleep(1000);
-								} catch (InterruptedException e) {
-									Logger.writeln("!camera.isOpen()" + e.getMessage());
-								}
-							}	
-						}				
-					}		
-				}		
-			});
-			
-			cameraCaptureThread.start();
-			barcodeReadThread.start();
-		}else {
-			
-			Logger.writeln("camera capture disabled");
-		}
-
-		if(runLPRS) {
-			lprsSendMsgThread = new Thread(new Runnable() {
-				
-				public void run() {
-					Logger.writeln("run lprs msg tx thread");
-					while(true) {
-						
-						try {
-							if(lprsMsgBuf.size()>0) {
-								
-								try {
-									
-									sendOutLprsMessage(lprsMsgBuf.get(0));
-									incrDecrLprsMessageBuf(lprsMsgBuf.get(0), LPRS_MSGBUF_DECR);
-									Logger.writeln("send out lprs time sync request or startTransaction/StopTransaction message");
-								}catch (Exception e) {
-									
-									if(lprsMsgBuf.size()>20) {
-										incrDecrLprsMessageBuf(lprsMsgBuf.get(0), LPRS_MSGBUF_DECR);
-										Logger.writeln("error in sending out lprs msg, remove unsent msgs in buffer to avoid overflow!!");
-									}
-								}
-								
-							}
-							
-							try {
-						 		Thread.sleep(10);
-							}catch (Exception e){
-								
-							}
-						 		
-						}catch (Exception e) {
-								e.printStackTrace();
-						}
-					}
-				}
-				
-			});
-			lprsSendMsgThread.start();	
-		}
-		
-		stopQueueing = new JButton("");
-		stopQueueing.setContentAreaFilled(false);
-		stopQueueing.setBorderPainted(false);
-		stopQueueing.setBounds(view.getUIConfig("ui_config/stopQueueing/x"), view.getUIConfig("ui_config/stopQueueing/y"), view.getUIConfig("ui_config/stopQueueing/w"), view.getUIConfig("ui_config/stopQueueing/h"));	
-		try {
-			stopQueueing.setIcon(new ImageIcon(uiImage.get("StopQueueingBtn").getScaledInstance(152, 72, Image.SCALE_SMOOTH)));
-		} catch(NullPointerException e) {
-			stopQueueing.setIcon(new ImageIcon(uiImage.get("StopBtn").getScaledInstance(152, 72, Image.SCALE_SMOOTH)));
-		}
-		stopQueueing.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent evt) {
-				Logger.writeln("Unlock by STOP queueing button");
-				stopTransactionConf(send(stopTransaction("TS", OCPP.Reason.DeAuthorized)));
-			}
-
-		});
-
-		
-		
-		startCharge = new JButton("");
-		startCharge.setContentAreaFilled(false);
-		startCharge.setBorderPainted(false);
-		startCharge.setBounds(view.getUIConfig("ui_config/startCharge/x"), view.getUIConfig("ui_config/startCharge/y"), view.getUIConfig("ui_config/startCharge/w"), view.getUIConfig("ui_config/startCharge/h"));
-		startCharge.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if(selectTime > 0) {
-					TimeSlotSelect("TS", selectTime);
-				}
-			}
-		});
-		
-		
-		fullyCharge = new JButton("");
-		fullyCharge.setContentAreaFilled(false);
-		fullyCharge.setBorderPainted(false);
-		fullyCharge.setBounds(view.getUIConfig("ui_config/fullyCharge/x"), view.getUIConfig("ui_config/fullyCharge/y"), view.getUIConfig("ui_config/fullyCharge/w"), view.getUIConfig("ui_config/fullyCharge/h"));
-		fullyCharge.setIcon(new ImageIcon(uiImage.get("FullChargeBtn").getScaledInstance(195, 91, Image.SCALE_SMOOTH)));
-		fullyCharge.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				selectTime = TIME_SELECT_FULL;
-				TimeSlotSelect("TS", selectTime);
-//				updateTimeBtn(false, true, true);
-//				view.showTimeSlot();
-			}
-		});
-		
-		stopTimeCharge = new JButton("");
-		stopTimeCharge.setContentAreaFilled(false);
-		stopTimeCharge.setBorderPainted(false);
-		stopTimeCharge.setBounds(view.getUIConfig("ui_config/stopTimeCharge/selecting/x"), view.getUIConfig("ui_config/stopTimeCharge/selecting/y"), view.getUIConfig("ui_config/stopTimeCharge/selecting/w"), view.getUIConfig("ui_config/stopTimeCharge/selecting/h"));
-		stopTimeCharge.setIcon(new ImageIcon(uiImage.get("StopBtn").getScaledInstance(195, 91, Image.SCALE_SMOOTH)));	
-		stopTimeCharge.addActionListener(new ActionListener() {
-		
-			@Override
-			public void actionPerformed(ActionEvent evt) {
-				//Logger.writeln("Unlock by STOP button");
-//				buttonUnlock=true;
-//				charger.setCableLock(false);
-				if(status == State.Authorize) {
-					if(contactor.getState()) {
-						contactor.setState(false);
-					}
-					plugAndChargeUnlock = true;
-					charger.setCableLock(false);
-				} else {
-					if(status == State.NetworkDown) {
-						new Timer().schedule(new TimerTask() {
-							@Override
-							public void run() {
-								Logger.writeln("stopTimeCharge remoteStopTransaction.");
-								stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.Remote)));
-							}
-							
-						}, 100);
-					} else {
-						Logger.writeln("stopTimeCharge deAuthorizedStopTransaction.");
-						stopTransactionConf(send(stopTransaction("TS", OCPP.Reason.DeAuthorized)));
-						if(isLMSSuspended) {
-							view.showImage(uiImage.get("LMS-Suspended"));
-						}
-					}
-				}
-			}
-
-		});
-		
-		resetCharge = new JButton("");
-		resetCharge.setContentAreaFilled(false);
-		resetCharge.setBorderPainted(false);
-		resetCharge.setBounds(view.getUIConfig("ui_config/resetCharge/x"), view.getUIConfig("ui_config/resetCharge/y"), view.getUIConfig("ui_config/resetCharge/w"), view.getUIConfig("ui_config/resetCharge/h"));
-		resetCharge.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				selectTime = 0;
-				view.showTimeSlot(selectTime);
-				updateTimeBtn(true, false, false);
-//				view.timeSelectBtnUpdate(uiImage.get("TimeSelectBtn"));
-//				view.repaint();
-			}
-		});
-		
-		addHour = new JButton("");
-		addHour.setFont(new Font("Arial", Font.PLAIN, 26));
-		addHour.setForeground(Color.WHITE);
-		addHour.setContentAreaFilled(false);
-		addHour.setBorderPainted(false);
-		addHour.setBounds(view.getUIConfig("ui_config/addHour/x"), view.getUIConfig("ui_config/addHour/y"), view.getUIConfig("ui_config/addHour/w"), view.getUIConfig("ui_config/addHour/h"));
-		addHour.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if(selectTime != TIME_SELECT_FULL) {
-					int maxTime = config.getJSONObject("Time Slot Maximum (Min)").getInt("Value"); 
-					if(selectTime <= 0) {
-//						view.showImage(uiImage.get("TimeSelect-time"));
-						updateTimeBtn(true, true, true);
-//						view.repaint();
-					}
-					selectTime += 60;
-					selectTime = selectTime > maxTime ? maxTime : selectTime;
-					view.showTimeSlot(selectTime);
-				}
-			}
-		});
-		
-		minusHour = new JButton("");
-		minusHour.setFont(new Font("Arial", Font.PLAIN, 26));
-		minusHour.setForeground(Color.WHITE);
-		minusHour.setContentAreaFilled(false);
-		minusHour.setBorderPainted(false);
-		minusHour.setBounds(view.getUIConfig("ui_config/minusHour/x"), view.getUIConfig("ui_config/minusHour/y"), view.getUIConfig("ui_config/minusHour/w"), view.getUIConfig("ui_config/minusHour/h"));
-		minusHour.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if(selectTime != TIME_SELECT_FULL) {
-					if(selectTime - 60 <= 0) {
-						updateTimeBtn(true, false, false);
-					}
-					
-					selectTime -= 60;
-					selectTime = selectTime <= 0 ? 0 : selectTime;
-					view.showTimeSlot(selectTime);
-				}
-			}
-		});
-		
-		addMin = new JButton("");
-		addMin.setFont(new Font("Arial", Font.PLAIN, 26));
-		addMin.setForeground(Color.WHITE);
-		addMin.setContentAreaFilled(false);
-		addMin.setBorderPainted(false);
-		addMin.setBounds(view.getUIConfig("ui_config/addMin/x"), view.getUIConfig("ui_config/addMin/y"), view.getUIConfig("ui_config/addMin/w"), view.getUIConfig("ui_config/addMin/h"));
-		addMin.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if(selectTime != TIME_SELECT_FULL) {
-					if(selectTime <= 0) {
-						updateTimeBtn(true, true, true);
-//						view.repaint();
-					}
-					
-					int maxTime = config.getJSONObject("Time Slot Maximum (Min)").getInt("Value"); 
-					selectTime += selectInterval;
-					selectTime = selectTime > maxTime ? maxTime : selectTime;
-					view.showTimeSlot(selectTime);
-				}
-			}
-		});
-		
-		minusMin = new JButton("");
-		minusMin.setFont(new Font("Arial", Font.PLAIN, 26));
-		minusMin.setForeground(Color.WHITE);
-		minusMin.setContentAreaFilled(false);
-		minusMin.setBorderPainted(false);
-		minusMin.setBounds(view.getUIConfig("ui_config/minusMin/x"), view.getUIConfig("ui_config/minusMin/y"), view.getUIConfig("ui_config/minusMin/w"), view.getUIConfig("ui_config/minusMin/h"));
-		minusMin.addActionListener(new ActionListener() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				if(selectTime != TIME_SELECT_FULL) {
-					if(selectTime - selectInterval <= 0) {
-						updateTimeBtn(true, false, false);
-//						view.repaint();
-					}
-					
-					selectTime -= selectInterval;
-					selectTime = selectTime <= 0 ? 0 : selectTime;
-					view.showTimeSlot(selectTime);
-				}
-			}
-		});
-		
-		DeviceManager.addUSBListener(this);
-		
+		cameraCapture_Init();
+		timeSelectButton_Init();
+		DeviceManager.addUSBListener(this);	
 		imgsTx = new ArrayList<BufferedImage>();
-
-		
-		if((config.getJSONObject("Hardware Version").getString("Value").equals("V2_5"))) {
-			
-			
-			try {
-			ADCChannel[] adcPwrChk = new ADCChannel[2];
-			
-			adcPwrChk[PowerSupplyCheck.ADC_P12VSENSE] = adc.getADCChannel(ioSet.getInt("ADC_P12VSENSE"));
-			adcPwrChk[PowerSupplyCheck.ADC_N12VSENSE] = adc.getADCChannel(ioSet.getInt("ADC_N12VSENSE"));
-			powerChk.setADCHardware(adcPwrChk);
-			
-			powerChk.dcPwerFailCheckStart();
-			}catch (Exception e) {
-				Logger.writeln("Error in initi AC power check");
-			}
-		}
-
-		int cpErrorCntThreshold =  20;
-		cpErrorCheckThread = new Thread(new Runnable() {
-			int cpErrorCnt = 0;
-			@Override
-			public void run() {
-				
-				while(true) {
-
-					if(status==State.CPError) {
-						cpErrorCnt++;
-						//Logger.writeln("CPError detected");
-					}else {
-						cpErrorCnt=0;
-						//Logger.writeln("CPError reset");
-					}	
-					try {
-						Thread.sleep(500);
-					} catch (InterruptedException e) {
-					
-					}
-					if(cpErrorCnt>(cpErrorCntThreshold)) {
-						Logger.writeln("CPError triggered & unlock");
-						if(contactor.getState()) {
-							contactor.setState(false);
-						}
-						charger.setCableLock(false);						
-					}
-				}		
-			}		
-		});
-		cpErrorCheckThread.start();
-		
-		//refreshLedColor(20);   //need debug
-		refreshLedColor0(20);
-		
-		if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
-			
-			//meterIC.irq1CheckStart();
-			meterIC.irqAddListener();
-			//meterIC.initialization();
-			meterIC.initialization();
-			
-			
-		//	meterIC.irq1CheckStart();
-			meterIC.addPwrChkListener(new PowerCheckListener() {
-				
-				@Override
-				public int acLoss(ChangeEvent evt) {
-					Logger.writeln("acloss triggered in cs");
-					contactor.setState(false);
-					if(charger.isLocked()) {
-						charger.setCableLock(false);
-					}
-					return 0;
-				}
-	
-				@Override
-				public int overCurrent(ChangeEvent evt) {
-					return 0;
-				}
-	
-	
-			});
-		}			
-		
+		cpErrorCheckThread_Init();
+		refreshLedColor0(20);		
 		//testCheckADE7854(5);
-		
 		Logger.writeln("Setup finish");
-		
 //		System.out.println("Width: " + view.getWidth() + ", Heinght: " + view.getHeight());
 	}
 
@@ -1962,7 +590,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	}
 	
 	
-	private void updateIoSet() {
+	private void GPIO_Config() {
 		ioSet = new JSONObject(configinfo.ioMap).getJSONObject(config.getJSONObject("Hardware Version").getString("Value")); //update hardware version
 	}
 	
@@ -2309,6 +937,7 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 
 		return image;
 	}	
+	
 	
 	public InputStream captureImgToFile() {
 		try {
@@ -2880,10 +1509,1315 @@ public class ChargingStation implements ChangeListener, Configurable, DataListen
 	        config.put("Enable CPError", new JSONObject("{\"Type\":\"Selection\",\"Authority\":\"Admin\",\"Value\":\"Yes\",\"Option\":[\"Yes\",\"No\"]}"));
 		}
 	}
-	@Override
-	public void dataReceived(DataEvent evt) {
+	
+	private void unlockButton_Init() {
+		unlockButton = new SoftButton();
+		JButton unlockJButton = new JButton(new ImageIcon("./resources/CST/UnlockButton.png"));
+		unlockJButton.setPressedIcon(new ImageIcon("./resources/CST/UnlockButtonPressed.png"));	
+		unlockJButton.setContentAreaFilled(false);
+		unlockJButton.setBorderPainted(false);
+		unlockJButton.setBounds(view.getUIConfig("ui_config/unlockJButton/x"), view.getUIConfig("ui_config/unlockJButton/y"), view.getUIConfig("ui_config/unlockJButton/w"), view.getUIConfig("ui_config/unlockJButton/h"));
+			
+		unlockButton.setSoftButton(unlockJButton);						
+		view.add(unlockButton.getSoftButton(),0);
+		view.revalidate();
 	}
 	
+	private void unlockButtonListener_Add() {
+		try {
+			unlockButton.getSoftButton().addActionListener(new ActionListener(){
+				@Override
+				public void actionPerformed(ActionEvent e) {
+					// TODO Auto-generated method stub
+					if(config.getJSONObject("Authentication").getString("Value").equals("Plug & Charge")) {
+						if( (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )) {
+							contactor.setState(false);
+						}else{
+							if(contactor.getState()) {
+								contactor.setState(false);
+							}							
+						}
+						plugAndChargeUnlock = true;
+						charger.setCableLock(false);
+					}else {
+						buttonUnlock=true;
+						charger.setCableLock(false);
+					}
+				}		
+			});
+			unlockButton.setVisible(false);	
+		}catch(Exception e) {
+			Logger.writeln("Error init STOP button");	
+		}
+	}
+	
+	private void barcode_Init() {
+		SerialAdapter barcodeSerial = new SerialAdapter("/dev/ttyS0", 9600, p, false);
+		barcodeSerial.setName("barcode");
+		barcode = new DS9208(barcodeSerial);
+	}
+	
+	private void barcodeListener_Add() {
+		barcodeListener = new DataListener() {
+			@Override
+			public void dataReceived(DataEvent evt) {
+				Logger.writeln("Barcode read " + new String(evt.getData()));
+				if(new String(evt.getData()).equals("")) {
+					return;
+				}
+				if(status == State.Authorize) {
+					setState(State.Authorizing);
+				}
+				if(serverDown) {
+					Logger.writeln("Self authorize @ no reply");
+					authorizeConf(null);
+				} else {
+					authorizeConf(send(authorize(new String(evt.getData()), OcppClient.QRCODE)));
+				}
+			}
+		};
+	}
+	
+	private void currentConsumption_set() {
+		try {
+			chargerCurrentConsumption = ((double)config.getJSONObject("Charger current consumption(mA)").getInt("Value"))/1000;
+		}catch (Exception e) {
+			Logger.writeln("Error in getting Charger current consupmtion configuration!");
+		}	
+	}
+	
+	private void overcurrentMargin_set() {
+		try {
+			overcurrentMargin = config.getJSONObject("Over-Current Margin(%)").getInt("Value");
+			Logger.writeln("Over current margin is :" +overcurrentMargin);
+		}catch (Exception e) {
+			Logger.writeln("Error in overcurrent margin configuration!");
+		}	
+	}
+	
+	private void contactor_Init() {
+		try {
+			
+			if(config.getJSONObject("Hardware Version").getString("Value").equals("V1_5") || config.getJSONObject("Hardware Version").getString("Value").equals("V1_6")) {
+				GPIO enableL1 = new GPIO(ioSet.getInt("EnableL1"), GPIO.State.LOW);
+				GPIO enableN = new GPIO(ioSet.getInt("EnableN"), GPIO.State.LOW);
+				GPIO enableL2L3 = new GPIO(ioSet.getInt("EnableL2L3"), GPIO.State.LOW);
+			//	GPIO enable31 = new GPIO(ioSet.getInt("Enable31"), GPIO.State.LOW);				
+
+				contactorControl= new GPIO[3];
+				contactorControl[0] = enableN;
+				contactorControl[1] = enableL1;
+				contactorControl[2] = enableL2L3;
+				//contactorControl[3] = enable31;
+				
+				contactorMode = new boolean[3];
+				switch(config.getJSONObject("Phase").getString("Value")) {
+				case "3 Phase":
+					Logger.writeln("Setting up 3 phase contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = true;
+					contactorMode[2] = true;
+				//	contactorMode[3] = false;
+					break;
+				case "1 Phase (L3)":
+					Logger.writeln("Setting up 1 phase (L3) contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = true;
+					contactorMode[2] = false;
+					//contactorMode[3] = false;
+					break;
+				case "1 Phase (L2)":
+					Logger.writeln("Setting up 1 phase (L2) contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = true;
+					contactorMode[2] = false;
+					//contactorMode[3] = false;
+					break;
+				case "1 Phase (L1)":
+				default:
+					Logger.writeln("Setting up 1 phase (L1) contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = true;
+					contactorMode[2] = false;
+					//contactorMode[3] = false;
+					break;
+				}
+				contactor = new Contactor(contactorControl, contactorMode, 1000);
+				
+				new Thread(new Runnable() {
+
+					@Override
+					public void run() {
+						contactor.setState(true);
+						try {
+							Thread.sleep(1000);
+						} catch (InterruptedException e) {
+							Logger.writeln("contactor: " + e.getMessage());
+						}
+						contactor.setState(false);
+					}
+					
+				}).start();				
+				
+			}else if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
+				GPIO rl1_en = new GPIO(ioSet.getInt("RL1_EN"), GPIO.State.LOW);
+				GPIO rl2_en = new GPIO(ioSet.getInt("RL2_EN"), GPIO.State.LOW);		
+
+				contactorControl= new GPIO[2];
+				contactorControl[0] = rl1_en;				// RL1_EN must be at index 0 for maintaining on/off sequence
+				contactorControl[1] = rl2_en;				// RL2_EN must be at index 1 for maintaining on/off sequence
+				
+				contactorMode = new boolean[2];
+				switch(config.getJSONObject("Phase").getString("Value")) {
+				case "3 Phase":
+					Logger.writeln("Setting up 3 phase contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = true;
+					break;
+				case "1 Phase (L3)":
+					Logger.writeln("Setting up 1 phase (L3) contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = false;
+					break;
+				case "1 Phase (L2)":
+					Logger.writeln("Setting up 1 phase (L2) contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = true;
+					break;
+				case "1 Phase (L1)":
+				default:
+					Logger.writeln("Setting up 1 phase (L1) contactor");
+					contactorMode[0] = true;
+					contactorMode[1] = false;
+					break;
+				}
+				//contactor = new Contactor(contactorControl, contactorMode, 1000, Contactor.CONTROL_SCHEME_V2);				
+				GPIO[] contReadIO = new GPIO[2];
+				contReadIO[0] = new GPIO(ioSet.getInt("RL1_STATUS"), GPIO.PullMode.NO_PULL);
+				contReadIO[1] = new GPIO(ioSet.getInt("RL2_STATUS"), GPIO.PullMode.NO_PULL);
+				contactor = new Contactor(contactorControl, contReadIO, contactorMode, 1000, Contactor.CONTROL_SCHEME_V2);
+			} else {
+				
+				GPIO enable1 = new GPIO(ioSet.getInt("Enable1"), GPIO.State.LOW);
+				GPIO enable2 = new GPIO(ioSet.getInt("Enable2"), GPIO.State.LOW);
+				GPIO enable21 = new GPIO(ioSet.getInt("Enable21"), GPIO.State.LOW);
+				GPIO enable31 = new GPIO(ioSet.getInt("Enable31"), GPIO.State.LOW);
+				Logger.writeln("Hardware version: "+config.getJSONObject("Hardware Version").getString("Value"));
+				Logger.writeln("IO pin enable1 : "+ioSet.getInt("Enable1"));
+				Logger.writeln("IO pin enable2 : "+ioSet.getInt("Enable2"));
+				Logger.writeln("IO pin enable21 : "+ioSet.getInt("Enable21"));
+				Logger.writeln("IO pin enable31 : "+ioSet.getInt("Enable31"));
+				
+				if(config.getJSONObject("Hardware Version").getString("Value").equals("V0_3")) {
+					GPIO enable3 = new GPIO(ioSet.getInt("Enable3"), GPIO.State.LOW);
+					contactorControl= new GPIO[5];
+					contactorControl[0] = enable21;
+					contactorControl[1] = enable31;
+					contactorControl[2] = enable1;
+					contactorControl[3] = enable2;
+					contactorControl[4] = enable3;
+					
+					contactorMode = new boolean[5];
+					switch(config.getJSONObject("Phase").getString("Value")) {
+					case "3 Phase":
+						Logger.writeln("Setting up 3 phase contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = false;
+						contactorMode[2] = true;
+						contactorMode[3] = true;
+						contactorMode[4] = true;
+						break;
+					case "1 Phase (L3)":
+						Logger.writeln("Setting up 1 phase (L3) contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = true;
+						contactorMode[2] = false;
+						contactorMode[3] = false;
+						contactorMode[4] = false;
+						break;
+					case "1 Phase (L2)":
+						Logger.writeln("Setting up 1 phase (L2) contactor");
+						contactorMode[0] = true;
+						contactorMode[1] = false;
+						contactorMode[2] = false;
+						contactorMode[3] = false;
+						contactorMode[4] = false;
+						break;
+					case "1 Phase (L1)":
+					default:
+						Logger.writeln("Setting up 1 phase (L1) contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = false;
+						contactorMode[2] = true;
+						contactorMode[3] = false;
+						contactorMode[4] = false;
+						break;
+					}
+					contactor = new Contactor(contactorControl, contactorMode, 1000);
+	
+					new Thread(new Runnable() {
+	
+						@Override
+						public void run() {
+							contactor.setState(true);
+							try {
+								Thread.sleep(1000);
+							} catch (InterruptedException e) {
+								Logger.writeln("contactor: " + e.getMessage());
+							}
+							contactor.setState(false);
+						}
+						
+					}).start();
+				} else if(config.getJSONObject("Hardware Version").getString("Value").equals("V1_0")) {
+					contactorControl= new GPIO[4];
+					contactorControl[0] = enable21;
+					contactorControl[1] = enable31;
+					contactorControl[2] = enable1;
+					contactorControl[3] = enable2;
+					
+					contactorMode = new boolean[4];
+					switch(config.getJSONObject("Phase").getString("Value")) {
+					case "3 Phase":
+						Logger.writeln("Setting up 3 phase contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = false;
+						contactorMode[2] = true;
+						contactorMode[3] = true;
+						break;
+					case "1 Phase (L3)":
+						Logger.writeln("Setting up 1 phase (L3) contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = true;
+						contactorMode[2] = false;
+						contactorMode[3] = false;
+						break;
+					case "1 Phase (L2)":
+						Logger.writeln("Setting up 1 phase (L2) contactor");
+						contactorMode[0] = true;
+						contactorMode[1] = false;
+						contactorMode[2] = false;
+						contactorMode[3] = false;
+						break;
+					case "1 Phase (L1)":
+					default:
+						Logger.writeln("Setting up 1 phase (L1) contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = false;
+						contactorMode[2] = true;
+						contactorMode[3] = false;
+						break;
+					}
+					contactor = new Contactor(contactorControl, contactorMode, 1000);
+					
+					new Thread(new Runnable() {
+	
+						@Override
+						public void run() {
+							contactor.setState(true);
+							try {
+								Thread.sleep(1000);
+							} catch (InterruptedException e) {
+								Logger.writeln("contactor: " + e.getMessage());
+							}
+							contactor.setState(false);
+						}
+						
+					}).start();
+				}else {
+					contactorControl= new GPIO[4];
+					contactorControl[0] = enable21;
+					contactorControl[1] = enable31;
+					contactorControl[2] = enable1;
+					contactorControl[3] = enable2;
+					
+					contactorMode = new boolean[4];
+					switch(config.getJSONObject("Phase").getString("Value")) {
+					case "3 Phase":
+						Logger.writeln("Setting up 3 phase contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = false;
+						contactorMode[2] = true;
+						contactorMode[3] = true;
+						break;
+					case "1 Phase (L3)":
+						Logger.writeln("Setting up 1 phase (L3) contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = true;
+						contactorMode[2] = false;
+						contactorMode[3] = false;
+						break;
+					case "1 Phase (L2)":
+						Logger.writeln("Setting up 1 phase (L2) contactor");
+						contactorMode[0] = true;
+						contactorMode[1] = false;
+						contactorMode[2] = false;
+						contactorMode[3] = false;
+						break;
+					case "1 Phase (L1)":
+					default:
+						Logger.writeln("Setting up 1 phase (L1) contactor");
+						contactorMode[0] = false;
+						contactorMode[1] = false;
+						contactorMode[2] = true;
+						contactorMode[3] = false;
+						break;
+					}
+					contactor = new Contactor(contactorControl, contactorMode, 0);
+				}
+				
+			}
+			
+//			if(config.getJSONObject("Type").getString("Value").equals("Socket")) {
+				lock = new GPIO(ioSet.getInt("Lock"), GPIO.State.LOW);
+//			} else {
+//				lock = new GPIO(ioSet.getInt("Lock"), lockKey.isLow() ? GPIO.State.HIGH : GPIO.State.LOW);
+//			}
+			if((config.getJSONObject("Hardware Version").getString("Value").equals("V2_5") )){
+				lock2 = new GPIO(ioSet.getInt("Lock2"), GPIO.State.LOW);
+				lockState = new GPIO(ioSet.getInt("LockState"), GPIO.PullMode.NO_PULL);
+				Logger.writeln("Lock2 GPIO initialized");
+			}else {
+				lockState = new GPIO(ioSet.getInt("LockState"), GPIO.PullMode.PULL_UP);
+			}
+
+			if((config.getJSONObject("Hardware Version").getString("Value").equals("V1_0") )|| (config.getJSONObject("Hardware Version").getString("Value").equals("V1_5")) || config.getJSONObject("Hardware Version").getString("Value").equals("V1_6") || (config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) ) {
+				lockState.setMode(GPIO.INVERTED);
+				Logger.writeln("Lock state GPIO logic set inverted");
+			}
+
+			cp = new PWMPort(ioSet.getInt("CP"));
+//			PWMPort pwm1 = new PWMPort(1);
+//	    	pwm1.setFrequency(1000);
+//			pwm1.setDuty(75);
+		} catch(GpioPinExistsException e) {
+			Logger.writeln("Contactor GPIO error");
+		}
+	}
+	
+	private void ChargingSchedulePeriod_set() {
+		schedulePeriods = new OCPP.ChargingSchedulePeriod[1];
+		switch(config.getJSONObject("Phase").getString("Value")) {
+		case "3 Phase":
+			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 3);
+			break;
+		case "1 Phase (L3)":
+			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 1);
+			break;
+		case "1 Phase (L2)":
+			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 1);
+			break;
+		case "1 Phase (L1)":
+		default:
+			schedulePeriods[0] = new OCPP.ChargingSchedulePeriod(0, ((float)config.getJSONObject("Default Capacity (A)").getInt("Value")), 1);
+			break;
+		}
+	}
+	
+	private void Profile_set() {
+		defaultProfile = new OCPP.ChargingProfile(1, 0, OCPP.ChargingProfilePurposeType.TxDefaultProfile, OCPP.ChargingProfileKindType.Absolute, new OCPP.ChargingSchedule(OCPP.ChargingRateUnitType.W, schedulePeriods));
+		currentProfile = defaultProfile;
+	}
+	
+	private void ADC_cp_Init() {
+		if(config.getJSONObject("Hardware Version").getString("Value").equals("V0_3")) {
+			cpScaler = new Operation[2];
+			adc = new AD7888(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 3400);
+			cpScaler[0] = new Operation("*", 8);
+			cpScaler[1] = new Operation("-", 12000);
+			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));			
+		} else if((config.getJSONObject("Hardware Version").getString("Value").equals("V1_0")) || (config.getJSONObject("Hardware Version").getString("Value").equals("V1_5") || config.getJSONObject("Hardware Version").getString("Value").equals("V1_6"))) {
+			cpScaler = new Operation[2];
+			adc = new MCP3208(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 5000);
+			cpScaler[0] = new Operation("*", -8);
+			cpScaler[1] = new Operation("+", 12000);
+			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
+		} else if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
+			//cpScaler = new Operation[3];
+			cpScaler = new Operation[4];		// To be resumed to array size of 3 for final hardware!!
+			adc = new MCP3208(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 5000);
+			/*
+			cpScaler[0] = new Operation("*", 60);
+			cpScaler[1] = new Operation("-", 150000);
+			cpScaler[2] = new Operation("/", 11);
+			cpScaler[3] = new Operation("+", 1010);		// add for first PCBA sample only!! to be removed for final hardware!!
+*/
+			/*
+			cpScaler[0] = new Operation("*", 5058);
+			cpScaler[1] = new Operation("/", 1000);
+			cpScaler[2] = new Operation("-", 12484);
+			cpScaler[3] = new Operation("+", 0);	
+			*/
+			cpScaler[0] = new Operation("*", 1);
+			cpScaler[1] = new Operation("*", 1);
+			cpScaler[2] = new Operation("*", 1);
+			cpScaler[3] = new Operation("*", 1);			
+			
+			
+			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
+
+		} else {
+			cpScaler = new Operation[2];			
+			adc = new MCP3208(new SPI(new GPIO(ioSet.getInt("ADC"), GPIO.State.HIGH), 2000000, SPI.MODE3), 5000);
+			cpScaler[0] = new Operation("*", -5.10638);
+			cpScaler[1] = new Operation("+", 12804);
+			adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
+		}
+//		adc.setScaler(ioSet.getInt("ADC_CP"), new Scaler(cpScaler));
+	}
+
+	private void ADC_pp_Init() {
+		ppScaler = new Operation[4];
+		ppScaler[0] = new Operation("max", 1);
+		ppScaler[1] = new Operation("1/x", ioSet.getInt("ADC_REFERENCE"));
+		ppScaler[2] = new Operation("-", 1);
+		ppScaler[3] = new Operation("1/x", ioSet.getInt("PROXIMITY_PULLUP"));
+		adc.setScaler(ioSet.getInt("ADC_PP"), new Scaler(ppScaler));
+	}
+	
+	private void ADC_temp_Init() {
+		tempScaler = new Operation[4];
+		tempScaler[0] = new Operation("max", 1);
+		tempScaler[1] = new Operation("1/x", 5000);
+		tempScaler[2] = new Operation("-", 1);
+		tempScaler[3] = new Operation("1/x", 3000);
+		adc.setScaler(ioSet.getInt("ADC_TEMP"), new Scaler(tempScaler));		
+		JT103 = new NTCThermister(adc.getADCChannel(ioSet.getInt("ADC_TEMP")), 10000, 3435);
+	}
+	
+	private void Powermeter_set() {
+		double meterInitial = 0;
+		if(meterReading.exists()) {
+			FileInputStream fis;
+			try {
+				fis = new FileInputStream(meterReading);
+				byte[] b = new byte[fis.available()];
+				fis.read(b);
+				fis.close();
+				meterInitial = Double.parseDouble(new String(b));
+			} catch (IOException e) {
+			} catch (NumberFormatException e) {
+				try {
+					fis = new FileInputStream(meterReadingBak);
+					byte[] b = new byte[fis.available()];
+					fis.read(b);
+					fis.close();
+					meterInitial = Double.parseDouble(new String(b));
+				} catch(IOException e1) {
+				}
+			}
+		}
+		powerMeter = null;
+		if(config.getJSONObject("Powermeter Type").getString("Value").equals("ADE7754")) {
+			powerMeter = new ADE7754(new SPI(new GPIO(ioSet.getInt("PowerMeter"), GPIO.State.HIGH), 1000000, SPI.MODE1), JT103, (1000000 + 1000) / 1000, (100000 + 24000) / 24000, meterInitial);
+			powerMeter.calibrate();
+		}else if (config.getJSONObject("Powermeter Type").getString("Value").equals("ADE7854A")) {
+			 powerMeter = meterIC.getMeter();
+		} else {
+			SerialAdapter serial;
+			if( config.getJSONObject("Hardware Version").getString("Value").equals("V1_6") || config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {
+				if(config.getJSONObject("Offboard Powermeter Link").getString("Value").equals("RS485")) {
+					serial = new SerialAdapter("/dev/ttyS0", 9600, new Point(0, 0), false, true, new GPIO(ioSet.getInt("RS485_DIR"), GPIO.State.LOW), true);
+				}else {
+					serial = new SerialAdapter("/dev/ttyUSB0", 9600);
+					Logger.write("USB to serial adaptor enabled");
+				}
+			} else if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_0")) {
+				if(config.getJSONObject("Offboard Powermeter Link").getString("Value").equals("RS485")) {
+					serial = new SerialAdapter("/dev/ttyS0", 9600);
+				}else {
+					serial = new SerialAdapter("/dev/ttyUSB0", 9600);
+				}
+			} else {
+				serial = new SerialAdapter("/dev/ttyUSB0", 9600);
+			}
+			if(config.getJSONObject("Powermeter Type").getString("Value").equals("SPM91")) {
+				powerMeter = new SPM91(serial, Integer.parseInt(config.getJSONObject("Powermeter ID").getString("Value")));
+			} else if(config.getJSONObject("Powermeter Type").getString("Value").equals("SPM93")) {
+				powerMeter = new SPM93(serial, Integer.parseInt(config.getJSONObject("Powermeter ID").getString("Value")));
+			}
+//			powerMeter2 = new ADE7754(new SPI(new GPIO(ioSet.getInt("PowerMeter"), GPIO.State.HIGH), 1000000, SPI.MODE1), JT103, (1000000 + 1000) / 1000, (100000 + 24000) / 24000, meterInitial);
+//			new Timer().schedule(new TimerTask() {
+//			
+//				@Override
+//				public void run() {
+//					powerMeter2.calibrate();
+//				}
+//			
+//			}, 2000);
+		}
+	}
+	
+	private void charger_Init() {
+		if(config.getJSONObject("Hardware Version").getString("Value").equals("V2_5")) {	
+			charger = new IECCharger(powerMeter, config.getJSONObject("Type").getString("Value").equals("Socket") ? IECCharger.SOCKET : IECCharger.CABLE,
+					cp,	adc.getADCChannel(ioSet.getInt("ADC_CP"), ADCChannel.ALGO_FILTER1), adc.getADCChannel(ioSet.getInt("ADC_PP"), ADCChannel.ALGO_ADDSERIAL),
+					lock, lock2, lockState, LOCKVER, config.getJSONObject("Maximum Capacity (A)").getInt("Value"), IECCharger.CP_IDLE_TYPE2, 10);
+			Logger.writeln("V2.5 charger initialized");
+			
+		}else {		
+			charger = new IECCharger(powerMeter, config.getJSONObject("Type").getString("Value").equals("Socket") ? IECCharger.SOCKET : IECCharger.CABLE,
+					cp,	adc.getADCChannel(ioSet.getInt("ADC_CP")), adc.getADCChannel(ioSet.getInt("ADC_PP")),
+					lock, lockState, config.getJSONObject("Maximum Capacity (A)").getInt("Value"));
+		}
+	}
+	
+	private void estop_set() {
+		estopGpio = new GPIO[1];
+		estopGpio[0] = new GPIO(ioSet.getInt("ESTOP"), GPIO.PullMode.NO_PULL);
+		estop = new EStop(estopGpio);
+		//estopStatus = new GPIO(ioSet.getInt("ESTOP"), GPIO.State.HIGH);
+		estopStatus = estopGpio[0];
+		Logger.writeln("ESTOP GPIO initialized");
+		
+		
+		if(estopStatus.isLow()) {
+			Logger.writeln("ESTOP triggered detected at started up");
+			int numOfPhase=1;
+			fault = FaultState.ESTOP_TRIGGERED;
+			estop.setTriggerState(true);
+			if(config.getJSONObject("Phase").getString("Value").equals("3 Phase")) {
+				numOfPhase = 3;
+			}else {
+				numOfPhase = 1;
+			}
+			
+			contactor.setState(false);
+//			if(contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase)) {
+//				Logger.writeln("ESTOP triggered while contactors detected still closed, try re-open them again on more time..");
+//				contactor.setState(false);
+//				contactor.setOperationNormal(false);
+//			}
+			
+			if(charger.isLocked()) {
+				Logger.writeln("ESTOP triggered at startup and cable locked, open IEC lock");
+				view.showImage(uiImage.get("Emergency_button_pressed_halt"));
+				charger.setCableLock(false);
+			}else {
+				criticalFaultTriggered = true;
+				Logger.writeln("ESTOP triggered, originally unlocked and no unlock action");
+				view.showImage(uiImage.get("EStopHalt"));
+			}
+			//view.showImage(uiImage.get("Emergency_button_pressed_halt"));						
+		}			
+		
+		estopStatus.addActionListener(new ActionListener() {
+    		
+			@Override
+			public void actionPerformed(ActionEvent evt) {
+				Logger.writeln("ESTOP triggered detected");
+				if(estopStatus.isLow()) {
+					int numOfPhase=1;
+					fault = FaultState.ESTOP_TRIGGERED;
+					estop.setTriggerState(true);
+					if(config.getJSONObject("Phase").getString("Value").equals("3 Phase")) {
+						numOfPhase = 3;
+					}else {
+						numOfPhase = 1;
+					}
+					
+					contactor.setState(false);
+//					if(contactor.getState(Contactor.CONTROL_SCHEME_V2, numOfPhase)) {
+//						Logger.writeln("ESTOP triggered while contactors detected still closed, try re-open them again on more time..");
+//						contactor.setState(false);
+//						contactor.setOperationNormal(false);
+//					}
+					
+					if(charger.isLocked()) {
+						view.showImage(uiImage.get("Emergency_button_pressed_halt"));
+						charger.setCableLock(false);
+						Logger.writeln("ESTOP triggered, open IEC lock");
+					}else {
+						criticalFaultTriggered = true;
+						Logger.writeln("ESTOP triggered, originally unlocked and no unlock action");
+						view.showImage(uiImage.get("EStopHalt"));
+					}
+					//view.showImage(uiImage.get("Emergency_button_pressed_halt"));						
+				}
+			}
+    		
+    	});	
+	
+	}
+	
+	private void lockListener_Add() {
+		charger.addLockListener(new LockStateListener() {
+			
+			@Override
+			public void locked(ChangeEvent evt) {
+				
+				if(charger.getState() == IECCharger.STATE_B) {
+					////unlockButton.setVisible(true);							//2020-05-26 for re-enable "STOP" screen button	end here
+					setState(State.Locked);
+				} else {
+					charger.setCableLock(false);
+				}
+
+				if(keyLed != null) {
+					keyLed.setState(GPIO.HIGH);
+				}
+			}
+
+			@Override
+			public void lockFailed(ChangeEvent evt) {
+				Logger.writeln("lockFailed event handling");
+				setState(State.Replug);
+			}
+
+			@Override
+			public void unlocked(ChangeEvent evt) {
+				Logger.writeln("Unlock event handling");
+				
+				if(plugUnlockTimer != null) {
+					plugUnlockTimer.cancel();
+				}
+				
+
+				if(isChargingSession()) {
+					if(plugAndChargeUnlock || buttonUnlock) {
+						plugAndChargeUnlock = false;
+						buttonUnlock = false;
+						stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.Local)));		// add for unlock button at plug & charge
+					}else {
+						stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.EVDisconnected)));
+					}
+				}
+	
+				unlockButton.setVisible(false);						//2020-05-26 for re-enable "STOP" screen button	end here
+				// TODO
+				if(status != State.Initialize && status != State.Unavailable && status != State.NetworkDown) {
+					switch(charger.getState()) {
+					case Charger.STATE_CABLE_DISCONNECT:
+						setState(State.Ready);
+						break;
+					case Charger.STATE_CABLE_CONNECT:
+//						setState(State.Plugging);
+//						break;
+					case Charger.STATE_B:
+					case Charger.STATE_C:
+					case Charger.STATE_D:
+						setState(State.Unlocked);
+						break;
+					case Charger.STATE_N:
+						break;
+					default:
+						break;
+					}
+				}
+
+				if(keyLed != null) {
+					keyLed.setState(GPIO.LOW);
+				}
+			}
+		
+			@Override
+			public void unlockFailed(ChangeEvent evt) {
+				if(status != State.Initialize && status != State.Unavailable && status != State.NetworkDown) {
+					setState(State.Unlock);
+				}
+			}
+
+		});
+	}
+	
+	private void ADC_start() {
+		if((config.getJSONObject("Hardware Version").getString("Value").equals("V2_5"))) {
+			channels = new int[1];
+			channels[0] = ioSet.getInt("ADC_PP");
+			//adc.startConversion(1010, channels);
+			adc.startConversion(510, channels);		//20210505 
+		}else {
+			adc.startConversion(1010);
+		}
+	}
+	
+	private void housingSocietyLprsListener_add() {
+		housingSocietyLprsListener = new Thread(new Runnable() {
+			
+			@Override
+			public void run() {
+				String reply = "";
+				while(true) {
+					try {
+						if(housingSocietyLprsIS.available() > 0) {
+							byte[] b = new byte[housingSocietyLprsIS.available()];
+							housingSocietyLprsIS.read(b);
+							reply = new String(b);
+							System.out.println(reply);
+							EvseLprsAckMsg msg = new Gson().fromJson(reply, EvseLprsAckMsg.class);
+							//setSystemTime(msg.getTimestamp());
+							setSystemTimeLprs(msg.getTimestamp());		//2020-09-26 slightly modified for sending start up time sync request
+						}
+					} catch(JsonSyntaxException e1 ) {
+						Logger.writeln("Bad LPRS Acknowledge message : " + reply);
+					} catch (NullPointerException | IOException e) {
+					}
+					try {
+						Thread.sleep(500);
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+						Logger.writeln("config: " + e.getMessage());
+					}
+				}
+			}
+			
+		});
+		housingSocietyLprsListener.start();		
+	}
+	
+	private void cameraCapture_Init() {
+		runLPRS = true;
+		//String ipc = config.getJSONObject("LPRS Engine").getString("Value").toString();
+		if( (config.getJSONObject("LPRS Engine").getString("Value").equals("0.0.0.0") && (config.getJSONObject("LPRS").getString("Value").equals("0.0.0.0")))){
+			runLPRS = false;
+		}
+		
+		if(runLPRS || config.getJSONObject("Authentication").getString("Value").equals("Subscription")) {			
+			try {
+				camera = new Camera();
+			}catch (Throwable e) {
+				StringWriter errors = new StringWriter();
+				e.printStackTrace(new PrintWriter(errors));
+				Logger.writeln("Problem init webacam "+errors.toString());			
+			}
+			
+			Logger.writeln("camera captured enabled");
+			
+			String lprsRxHost = config.getJSONObject("LPRS Engine").getString("Value");
+			int Lprsport = 4445;
+			
+			if(runLPRS) {
+				
+				try {
+					Lprsport = config.getJSONObject("LPRS Engine Port").getInt("Value");
+					Logger.writeln("LPRS engine port "+Lprsport);
+				} catch (Exception e) {
+					Logger.writeln("Error in getting LPRS engine port");
+				}
+
+				lprsTimeSyncThread = new Thread(new Runnable() {
+					int repeatCnt = 0;
+					@Override
+					public void run() {
+
+		        		try {
+		        			Thread.sleep(5000);
+		        		}catch(Exception e ) {
+		        		}	
+						EvseLprsMsg msg0 = new EvseLprsMsg(++msgSerialLprsTimeSync, config.getJSONObject("Station Name").getString("Value"), "SyncTime","", OCPP.dateTime.format(new Date()));
+						//sendLprsMessage(new Gson().toJson(msg0));
+						incrDecrLprsMessageBuf(new Gson().toJson(msg0), LPRS_MSGBUF_INCR);
+						Logger.writeln("add power up lprs time sync request");
+						
+		        		try {
+		        			Thread.sleep(2000);
+		        		}catch(Exception e ) {
+		        		}				
+
+		        		tMark = System.currentTimeMillis();
+			        	while(true) {
+			    			if(System.currentTimeMillis()<tMark) {				// to handle any problem due to incorrect system time reset/re-sync
+			    				tMark = System.currentTimeMillis();
+			    				Logger.writeln("lprs process time mark manullay reset to current time");
+			    			}
+			        		
+			        		if((System.currentTimeMillis() - tMark) >= TIMESYNC_PERIOD) {
+			        			tMark = System.currentTimeMillis();
+								EvseLprsMsg msg = new EvseLprsMsg(++msgSerialLprsTimeSync, config.getJSONObject("Station Name").getString("Value"), "SyncTime","", OCPP.dateTime.format(new Date()));
+								//sendLprsMessage(new Gson().toJson(msg));
+								incrDecrLprsMessageBuf(new Gson().toJson(msg), LPRS_MSGBUF_INCR);
+			        			Logger.writeln("add periodic lprs time sync request");
+			        		}
+			        		try {
+			        			Thread.sleep(2000);
+			        		}catch(Exception e ) {
+			        		}
+			        	}
+			        }
+				});
+				lprsTimeSyncThread.start();
+				imgTx =  new ImgSend(lprsRxHost, Lprsport, config.getJSONObject("Station Name").getString("Value"));
+			}
+
+			barcodeReadThread = new Thread(new Runnable() {
+				private long readtime = 0;
+				private String code;
+				private int DEBOUNCE = 2000;
+				
+				@Override
+				public void run() {
+					while(keepOnCamCapture) {
+						try {
+							if(status == State.Authorize || status == State.Charging || status == State.Pause) {
+								
+								if(cameraImage != null) {
+//									BufferedImage tempImg = cameraImage;
+//									resize(cameraFrame, 336 ,252)
+//									BufferedImage tempImg = resize(convertToType(cameraImage, BufferedImage.TYPE_BYTE_GRAY), 336 ,252);
+									BufferedImage tempImg = convertToType(cameraImage, BufferedImage.TYPE_BYTE_GRAY);
+//									String newcode = null;
+									String newcode = BarcodeFactory.decode(tempImg);
+									tempImg = null;
+									
+									if(newcode != null) {
+										Logger.writeln("Camera read " + newcode);
+										if(!newcode.equals(code)) {
+											code = newcode;
+											readtime = System.currentTimeMillis();
+											if(status == State.Authorize || isChargingSession()) {
+												if(status == State.Authorize) {
+													setState(State.Authorizing);
+												}
+												authorizeConf(send(authorize(code, OcppClient.QRCODE)));
+											}
+										} else {
+											readtime = System.currentTimeMillis();
+										}
+										System.out.println("readtime: " + readtime);
+									} else {
+//										Logger.writeln("Camera read not hit");
+										if(System.currentTimeMillis() - readtime > DEBOUNCE) {
+											code = null;
+										}
+									}
+								}else {
+									Logger.writeln("No buffer image for QR Code Scan, go to sleep");
+									Thread.sleep(5000);
+								}
+							} else {
+								Thread.sleep(500);
+							}
+						} catch (InterruptedException e) {
+							Logger.writeln("barcodeReadThread InterruptedException: " + e.getMessage());
+						} catch (Exception e) {
+							Logger.writeln("barcodeReadThread Exception: " + e.getMessage());
+						}
+					}
+				}	
+			});		
+			
+			cameraCaptureThread = new Thread(new Runnable() {
+				@Override
+				public void run() {
+					long t = System.currentTimeMillis();
+					int barcodeCount = 0;
+					int camResetCounter = 0;
+					while(keepOnCamCapture) {		
+						if(lprsImgCapTimer.isTimesUp()) {
+							lprsImgCapTimer.resetTimer();
+							barcodeCount = barcodeCount >= 30 ? 1 : barcodeCount + 1;		
+							
+							if(!camera.isOpen()) {
+								camResetCounter += 1;
+								Logger.writeln("cam closed and open again:" + camResetCounter);
+								camera.open();
+								try {
+									Thread.sleep(1000);
+								} catch (InterruptedException e) {
+								}													
+							}
+										
+							if(camResetCounter > 10) {
+								Logger.writeln("Cam Capture Disabled Due To Connection Issue.");
+								keepOnCamCapture = false;
+							}
+													
+							if(camera.isOpen()) {
+								try {
+//									System.out.println(System.currentTimeMillis() - t);
+									t = System.currentTimeMillis();	
+								            
+									if (config.getJSONObject("Authentication").getString("Value").equals("Subscription") && status == State.Authorize)	
+									{
+										cameraImage = camera.getImage();
+										cameraFrame = convertToType(cameraImage, BufferedImage.TYPE_3BYTE_BGR);
+										AffineTransform tx = AffineTransform.getScaleInstance(-1, 1);
+										tx.translate(-cameraImage.getWidth(null), 0);
+										AffineTransformOp op = new AffineTransformOp(tx, AffineTransformOp.TYPE_NEAREST_NEIGHBOR);
+										BufferedImage pip = op.filter(cameraFrame, null);
+										pip = resize(pip, 336 ,252);
+										
+										if(status == State.Authorize) {	// Authorize state may be changed here after reading the cam image, e.g. after unlock button action 
+											view.showPIP(pip);
+										}		
+									}else if(( status != State.Authorize) &&(status != State.Authorizing)){
+										try {
+											cameraImage = camera.getImage();
+											BufferedImage frameBW = convertToType(cameraImage, BufferedImage.TYPE_BYTE_GRAY);
+											if(( status != State.Authorize) &&(status != State.Authorizing)) {	
+									        	if(imgTx != null) {
+									        		imgTx.process(frameBW);
+									        	}
+											}
+											}catch (Exception e) {
+												Logger.writeln("error in adding capture image");
+												camResetCounter += 1;
+											}
+										
+										if ( (config.getJSONObject("Authentication").getString("Value").equals("Subscription") && status == State.Charging) ||
+											 (config.getJSONObject("Authentication").getString("Value").equals("Subscription") && status == State.Pause)
+										) {
+											cameraImage = camera.getImage();
+											cameraFrame = convertToType(cameraImage, BufferedImage.TYPE_3BYTE_BGR);
+											AffineTransform tx = AffineTransform.getScaleInstance(-1, 1);
+											tx.translate(-cameraImage.getWidth(null), 0);
+											AffineTransformOp op = new AffineTransformOp(tx, AffineTransformOp.TYPE_NEAREST_NEIGHBOR);
+											BufferedImage pip = op.filter(cameraFrame, null);
+											pip = ChargingStation.resize(pip, 224 ,168);
+											
+											if(status == State.Charging || status == State.Pause) {				
+												view.showPIP(pip, 500, 430);
+											}
+										}
+									}			
+								} catch (Exception e) {
+									e.printStackTrace();
+								}
+							} else {
+								try {
+									Logger.writeln("delay 1s for closed cam");
+									Thread.sleep(1000);
+								} catch (InterruptedException e) {
+									Logger.writeln("!camera.isOpen()" + e.getMessage());
+								}
+							}	
+						}				
+					}		
+				}		
+			});
+			
+			cameraCaptureThread.start();
+			barcodeReadThread.start();
+		}else {
+			Logger.writeln("camera capture disabled");
+		}
+		
+		if(runLPRS) {
+			lprsSendMsgThread = new Thread(new Runnable() {
+				
+				public void run() {
+					Logger.writeln("run lprs msg tx thread");
+					while(true) {
+						
+						try {
+							if(lprsMsgBuf.size()>0) {
+								
+								try {
+									
+									sendOutLprsMessage(lprsMsgBuf.get(0));
+									incrDecrLprsMessageBuf(lprsMsgBuf.get(0), LPRS_MSGBUF_DECR);
+									Logger.writeln("send out lprs time sync request or startTransaction/StopTransaction message");
+								}catch (Exception e) {
+									
+									if(lprsMsgBuf.size()>20) {
+										incrDecrLprsMessageBuf(lprsMsgBuf.get(0), LPRS_MSGBUF_DECR);
+										Logger.writeln("error in sending out lprs msg, remove unsent msgs in buffer to avoid overflow!!");
+									}
+								}						
+							}
+							
+							try {
+						 		Thread.sleep(10);
+							}catch (Exception e){
+								
+							}
+						 		
+						}catch (Exception e) {
+								e.printStackTrace();
+						}
+					}
+				}
+			});
+			lprsSendMsgThread.start();	
+		}
+	}
+
+	private void Button_stopQueueing_Init() {
+		stopQueueing = new JButton("");
+		stopQueueing.setContentAreaFilled(false);
+		stopQueueing.setBorderPainted(false);
+		stopQueueing.setBounds(view.getUIConfig("ui_config/stopQueueing/x"), view.getUIConfig("ui_config/stopQueueing/y"), view.getUIConfig("ui_config/stopQueueing/w"), view.getUIConfig("ui_config/stopQueueing/h"));	
+		try {
+			stopQueueing.setIcon(new ImageIcon(uiImage.get("StopQueueingBtn").getScaledInstance(152, 72, Image.SCALE_SMOOTH)));
+		} catch(NullPointerException e) {
+			stopQueueing.setIcon(new ImageIcon(uiImage.get("StopBtn").getScaledInstance(152, 72, Image.SCALE_SMOOTH)));
+		}
+		stopQueueing.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent evt) {
+				Logger.writeln("Unlock by STOP queueing button");
+				stopTransactionConf(send(stopTransaction("TS", OCPP.Reason.DeAuthorized)));
+			}
+		});
+	}
+	
+	private void Button_startCharge_Init() {
+		startCharge = new JButton("");
+		startCharge.setContentAreaFilled(false);
+		startCharge.setBorderPainted(false);
+		startCharge.setBounds(view.getUIConfig("ui_config/startCharge/x"), view.getUIConfig("ui_config/startCharge/y"), view.getUIConfig("ui_config/startCharge/w"), view.getUIConfig("ui_config/startCharge/h"));
+		startCharge.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if(selectTime > 0) {
+					TimeSlotSelect("TS", selectTime);
+				}
+			}
+		});
+	}
+	
+	private void Button_fullyCharge_Init() {
+		fullyCharge = new JButton("");
+		fullyCharge.setContentAreaFilled(false);
+		fullyCharge.setBorderPainted(false);
+		fullyCharge.setBounds(view.getUIConfig("ui_config/fullyCharge/x"), view.getUIConfig("ui_config/fullyCharge/y"), view.getUIConfig("ui_config/fullyCharge/w"), view.getUIConfig("ui_config/fullyCharge/h"));
+		fullyCharge.setIcon(new ImageIcon(uiImage.get("FullChargeBtn").getScaledInstance(195, 91, Image.SCALE_SMOOTH)));
+		fullyCharge.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				selectTime = TIME_SELECT_FULL;
+				TimeSlotSelect("TS", selectTime);
+//				updateTimeBtn(false, true, true);
+//				view.showTimeSlot();
+			}
+		});
+	}
+	
+	private void Button_stopTimeCharge_Init() {
+		stopTimeCharge = new JButton("");
+		stopTimeCharge.setContentAreaFilled(false);
+		stopTimeCharge.setBorderPainted(false);
+		stopTimeCharge.setBounds(view.getUIConfig("ui_config/stopTimeCharge/selecting/x"), view.getUIConfig("ui_config/stopTimeCharge/selecting/y"), view.getUIConfig("ui_config/stopTimeCharge/selecting/w"), view.getUIConfig("ui_config/stopTimeCharge/selecting/h"));
+		stopTimeCharge.setIcon(new ImageIcon(uiImage.get("StopBtn").getScaledInstance(195, 91, Image.SCALE_SMOOTH)));	
+		stopTimeCharge.addActionListener(new ActionListener() {
+		
+			@Override
+			public void actionPerformed(ActionEvent evt) {
+				//Logger.writeln("Unlock by STOP button");
+//				buttonUnlock=true;
+//				charger.setCableLock(false);
+				if(status == State.Authorize) {
+					if(contactor.getState()) {
+						contactor.setState(false);
+					}
+					plugAndChargeUnlock = true;
+					charger.setCableLock(false);
+				} else {
+					if(status == State.NetworkDown) {
+						new Timer().schedule(new TimerTask() {
+							@Override
+							public void run() {
+								Logger.writeln("stopTimeCharge remoteStopTransaction.");
+								stopTransactionConf(send(stopTransaction(idTag, OCPP.Reason.Remote)));
+							}
+						}, 100);
+					} else {
+						Logger.writeln("stopTimeCharge deAuthorizedStopTransaction.");
+						stopTransactionConf(send(stopTransaction("TS", OCPP.Reason.DeAuthorized)));
+						if(isLMSSuspended) {
+							view.showImage(uiImage.get("LMS-Suspended"));
+						}
+					}
+				}
+			}
+		});
+	}
+
+	private void Button_resetCharge_Init() {
+		resetCharge = new JButton("");
+		resetCharge.setContentAreaFilled(false);
+		resetCharge.setBorderPainted(false);
+		resetCharge.setBounds(view.getUIConfig("ui_config/resetCharge/x"), view.getUIConfig("ui_config/resetCharge/y"), view.getUIConfig("ui_config/resetCharge/w"), view.getUIConfig("ui_config/resetCharge/h"));
+		resetCharge.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				selectTime = 0;
+				view.showTimeSlot(selectTime);
+				updateTimeBtn(true, false, false);
+//				view.timeSelectBtnUpdate(uiImage.get("TimeSelectBtn"));
+//				view.repaint();
+			}
+		});
+	}
+	
+	private void Button_addHour_Init() {
+		addHour = new JButton("");
+		addHour.setFont(new Font("Arial", Font.PLAIN, 26));
+		addHour.setForeground(Color.WHITE);
+		addHour.setContentAreaFilled(false);
+		addHour.setBorderPainted(false);
+		addHour.setBounds(view.getUIConfig("ui_config/addHour/x"), view.getUIConfig("ui_config/addHour/y"), view.getUIConfig("ui_config/addHour/w"), view.getUIConfig("ui_config/addHour/h"));
+		addHour.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if(selectTime != TIME_SELECT_FULL) {
+					int maxTime = config.getJSONObject("Time Slot Maximum (Min)").getInt("Value"); 
+					if(selectTime <= 0) {
+//						view.showImage(uiImage.get("TimeSelect-time"));
+						updateTimeBtn(true, true, true);
+//						view.repaint();
+					}
+					selectTime += 60;
+					selectTime = selectTime > maxTime ? maxTime : selectTime;
+					view.showTimeSlot(selectTime);
+				}
+			}
+		});
+	}
+	
+	private void Button_minusHour_Init() {
+		minusHour = new JButton("");
+		minusHour.setFont(new Font("Arial", Font.PLAIN, 26));
+		minusHour.setForeground(Color.WHITE);
+		minusHour.setContentAreaFilled(false);
+		minusHour.setBorderPainted(false);
+		minusHour.setBounds(view.getUIConfig("ui_config/minusHour/x"), view.getUIConfig("ui_config/minusHour/y"), view.getUIConfig("ui_config/minusHour/w"), view.getUIConfig("ui_config/minusHour/h"));
+		minusHour.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if(selectTime != TIME_SELECT_FULL) {
+					if(selectTime - 60 <= 0) {
+						updateTimeBtn(true, false, false);
+					}
+					
+					selectTime -= 60;
+					selectTime = selectTime <= 0 ? 0 : selectTime;
+					view.showTimeSlot(selectTime);
+				}
+			}
+		});
+	}
+	
+	private void Button_addMin_Init() {
+		addMin = new JButton("");
+		addMin.setFont(new Font("Arial", Font.PLAIN, 26));
+		addMin.setForeground(Color.WHITE);
+		addMin.setContentAreaFilled(false);
+		addMin.setBorderPainted(false);
+		addMin.setBounds(view.getUIConfig("ui_config/addMin/x"), view.getUIConfig("ui_config/addMin/y"), view.getUIConfig("ui_config/addMin/w"), view.getUIConfig("ui_config/addMin/h"));
+		addMin.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if(selectTime != TIME_SELECT_FULL) {
+					if(selectTime <= 0) {
+						updateTimeBtn(true, true, true);
+//						view.repaint();
+					}				
+					int maxTime = config.getJSONObject("Time Slot Maximum (Min)").getInt("Value"); 
+					selectTime += selectInterval;
+					selectTime = selectTime > maxTime ? maxTime : selectTime;
+					view.showTimeSlot(selectTime);
+				}
+			}
+		});
+	}
+	private void Button_minusMin_Init() {
+		minusMin = new JButton("");
+		minusMin.setFont(new Font("Arial", Font.PLAIN, 26));
+		minusMin.setForeground(Color.WHITE);
+		minusMin.setContentAreaFilled(false);
+		minusMin.setBorderPainted(false);
+		minusMin.setBounds(view.getUIConfig("ui_config/minusMin/x"), view.getUIConfig("ui_config/minusMin/y"), view.getUIConfig("ui_config/minusMin/w"), view.getUIConfig("ui_config/minusMin/h"));
+		minusMin.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if(selectTime != TIME_SELECT_FULL) {
+					if(selectTime - selectInterval <= 0) {
+						updateTimeBtn(true, false, false);
+//						view.repaint();
+					}
+					
+					selectTime -= selectInterval;
+					selectTime = selectTime <= 0 ? 0 : selectTime;
+					view.showTimeSlot(selectTime);
+				}
+			}
+		});
+	}
+	private void timeSelectButton_Init() {
+		Button_stopQueueing_Init();
+		Button_startCharge_Init();
+		Button_fullyCharge_Init();
+		Button_stopTimeCharge_Init();
+		Button_resetCharge_Init();
+		Button_addHour_Init();
+		Button_minusHour_Init();
+		Button_addMin_Init();
+		Button_minusMin_Init();
+	}
+	private void dcPowerCheck_Init() {
+		try {
+		ADCChannel[] adcPwrChk = new ADCChannel[2];
+		
+		adcPwrChk[PowerSupplyCheck.ADC_P12VSENSE] = adc.getADCChannel(ioSet.getInt("ADC_P12VSENSE"));
+		adcPwrChk[PowerSupplyCheck.ADC_N12VSENSE] = adc.getADCChannel(ioSet.getInt("ADC_N12VSENSE"));
+		powerChk.setADCHardware(adcPwrChk);
+		
+		powerChk.dcPwerFailCheckStart();
+		}catch (Exception e) {
+			Logger.writeln("Error in initi AC power check");
+		}
+	}
+	private void cpErrorCheckThread_Init() {
+		cpErrorCntThreshold =  20;
+		cpErrorCheckThread = new Thread(new Runnable() {
+			int cpErrorCnt = 0;
+			@Override
+			public void run() {
+				while(true) {
+					if(status==State.CPError) {
+						cpErrorCnt++;
+						//Logger.writeln("CPError detected");
+					}else {
+						cpErrorCnt=0;
+						//Logger.writeln("CPError reset");
+					}	
+					try {
+						Thread.sleep(500);
+					} catch (InterruptedException e) {
+						
+					}
+					if(cpErrorCnt>(cpErrorCntThreshold)) {
+						Logger.writeln("CPError triggered & unlock");
+						if(contactor.getState()) {
+							contactor.setState(false);
+						}
+						charger.setCableLock(false);						
+					}
+				}		
+			}		
+		});
+		cpErrorCheckThread.start();
+	}
+	private void acPowerCheck_Init() {
+		//meterIC.irq1CheckStart();
+		meterIC.irqAddListener();
+		//meterIC.initialization();
+		meterIC.initialization();
+				
+	//	meterIC.irq1CheckStart();
+		meterIC.addPwrChkListener(new PowerCheckListener() {
+			@Override
+			public int acLoss(ChangeEvent evt) {
+				Logger.writeln("acloss triggered in cs");
+				contactor.setState(false);
+				if(charger.isLocked()) {
+					charger.setCableLock(false);
+				}
+				return 0;
+			}
+			@Override
+			public int overCurrent(ChangeEvent evt) {
+				return 0;
+			}
+		});
+	}
+	
+	@Override
+	
+	public void dataReceived(DataEvent evt) {
+	}
+	 
 	@Override
 	public void received(ConnectionEvent evt) {
 //		serverDown = false;
